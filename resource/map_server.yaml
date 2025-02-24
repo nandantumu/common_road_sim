@@ -1,0 +1,3 @@
+map_server:
+    ros__parameters:
+        yaml_filename: "/FrictionEstimation/ros/src/common_road_sim/resource/clark_park/map_metadata.yaml"
