@@ -73,9 +73,7 @@ class MBSimulator(Node):
         self.pose_pub = self.create_publisher(
             PoseWithCovarianceStamped, "/ground_truth/pose", 10
         )
-        self.imu_pub = self.create_publisher(
-            Imu, "/fixposition/corrimu", 10
-        )
+        self.imu_pub = self.create_publisher(Imu, "/fixposition/corrimu", 10)
         self.control_sub = self.create_subscription(
             AckermannDriveStamped, "/ackermann_cmd", self.steer_callback, 10
         )
@@ -121,6 +119,16 @@ class MBSimulator(Node):
         odom_message.pose = pose_message.pose
         odom_message.twist = twist_message.twist
 
+        # Create the Imu message:
+        imu_message = Imu()
+        imu_message.header = pose_message.header
+        imu_message.orientation = pose_message.pose.pose.orientation
+        imu_message.angular_velocity.x = self.state[7]
+        imu_message.angular_velocity.y = self.state[9]
+        imu_message.angular_velocity.z = self.state[5]
+        imu_message.linear_acceleration.x = self.control_input[1]
+
+        self.imu_pub.publish(imu_message)
         self.pose_pub.publish(pose_message)
         self.odom_pub.publish(odom_message)
 
