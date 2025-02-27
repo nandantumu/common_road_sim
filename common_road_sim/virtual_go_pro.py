@@ -104,14 +104,14 @@ class VirtualGoProNode(Node):
         radius = int(
             radius * 1.2
         )  # Increase the radius to ensure the entire image is visible
-        print("Radius:", radius)
+        # print("Radius:", radius)
 
         try:
             y_low = center_y - radius
             y_high = center_y + radius
             x_low = center_x - radius
             x_high = center_x + radius
-            print("Indices:", y_low, y_high, x_low, x_high)
+            # print("Indices:", y_low, y_high, x_low, x_high)
             if (
                 y_low < 0
                 or y_high > self.map_height
