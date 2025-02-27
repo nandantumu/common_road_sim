@@ -6,6 +6,8 @@ from cv_bridge import CvBridge
 import cv2
 import numpy as np
 from ament_index_python.packages import get_package_share_directory
+from scipy.spatial.transform import Rotation as R
+import traceback
 
 #!/usr/bin/env python3
 
@@ -61,79 +63,116 @@ class VirtualGoProNode(Node):
 
         self.get_logger().info("Virtual GoPro node initialized.")
 
+    def image_rotation(self, image, point, angle):
+        """
+        Rotate the image by the specified angle.
+        """
+        rot_matrix = cv2.getRotationMatrix2D(point, angle, 1.0)
+        image_out = cv2.warpAffine(image, rot_matrix, (self.map_width, self.map_height))
+        return image_out
+
     def pose_callback(self, msg):
         """
         Callback function to process the robot's pose and generate a camera image.
         """
+        # Get the transform from map to base_link
+        transform = PoseStamped()
+        transform.pose = msg.pose.pose
+
+        # get rotation
+        qx = transform.pose.orientation.x
+        qy = transform.pose.orientation.y
+        qz = transform.pose.orientation.z
+        qw = transform.pose.orientation.w
+        # Convert quaternion to rotation matrix
+        r = R.from_quat([qx, qy, qz, qw])
+
+        # Extract Euler angles (roll, pitch, yaw)
+        roll, pitch, yaw = r.as_euler("xyz")
+
+        # Robot's position in the map frame
+        robot_x = transform.pose.position.x
+        robot_y = transform.pose.position.y
+
+        # Calculate the image center in map coordinates
+        center_x = int(robot_x * self.pixels_per_meter)
+        center_y = int(robot_y * self.pixels_per_meter)
+        point = (center_x, center_y)
+
+        # Calculate the radius of the image
+        radius = np.sqrt((self.image_width / 2) ** 2 + (self.image_height / 2) ** 2)
+        radius = int(
+            radius * 1.2
+        )  # Increase the radius to ensure the entire image is visible
+        print("Radius:", radius)
+
         try:
-            # Get the transform from map to base_link
-            transform = PoseStamped()
-            transform.pose = msg.pose.pose
-
-            # Robot's position in the map frame
-            robot_x = transform.pose.position.x
-            robot_y = transform.pose.position.y
-
-            # Calculate the image center in map coordinates
-            center_x = int(robot_x * self.pixels_per_meter)
-            center_y = int(robot_y * self.pixels_per_meter)
-
-            # Calculate the boundaries of the image in map coordinates
-            half_width = int(self.image_width / 2)
-            half_height = int(self.image_height / 2)
-            x_min = center_x - half_width
-            y_min = center_y - half_height
-            x_max = center_x + half_width
-            y_max = center_y + half_height
-
-            # Extract the image from the map
+            y_low = center_y - radius
+            y_high = center_y + radius
+            x_low = center_x - radius
+            x_high = center_x + radius
+            print("Indices:", y_low, y_high, x_low, x_high)
             if (
-                x_min >= 0
-                and y_min >= 0
-                and x_max < self.map_width
-                and y_max < self.map_height
+                y_low < 0
+                or y_high > self.map_height
+                or x_low < 0
+                or x_high > self.map_width
             ):
-                image = self.full_map[y_min:y_max, x_min:x_max]
+                raise IndexError("Image subset is out of bounds")
             else:
-                # Handle cases where the camera view extends beyond the map boundaries
-                image = np.zeros(
-                    (self.image_height, self.image_width, 3), dtype=np.uint8
-                )
+                image_subset = self.full_map[
+                    center_y - radius : center_y + radius,
+                    center_x - radius : center_x + radius,
+                ]
+        except IndexError as e:
+            # Likely problem is that the image subset is out of bounds
+            # We will solve this problem by padding the image with zeros
+            image_subset = np.zeros((2 * radius, 2 * radius, 3), dtype=np.uint8)
+            # Cast the image_subset to a cv2 image
+            image_subset = cv2.cvtColor(image_subset, cv2.COLOR_RGB2BGR)
+            x_min_valid = max(0, center_x - radius)
+            y_min_valid = max(0, center_y - radius)
+            x_max_valid = min(self.map_width, center_x + radius)
+            y_max_valid = min(self.map_height, center_y + radius)
 
-                # Calculate valid boundaries
-                x_min_valid = max(0, x_min)
-                y_min_valid = max(0, y_min)
-                x_max_valid = min(self.map_width, x_max)
-                y_max_valid = min(self.map_height, y_max)
-
-                # Extract the valid portion of the map
+            # Only extract and assign if we have a valid region
+            if y_min_valid < y_max_valid and x_min_valid < x_max_valid:
                 valid_image = self.full_map[
                     y_min_valid:y_max_valid, x_min_valid:x_max_valid
                 ]
+                x_offset = x_min_valid - (center_x - radius)
+                y_offset = y_min_valid - (center_y - radius)
 
-                # Calculate the offsets for placing the valid image in the full image
-                x_offset = x_min_valid - x_min
-                y_offset = y_min_valid - y_min
+                # Check that source and target dimensions are valid
+                if valid_image.shape[0] > 0 and valid_image.shape[1] > 0:
+                    image_subset[
+                        y_offset : y_offset + valid_image.shape[0],
+                        x_offset : x_offset + valid_image.shape[1],
+                    ] = valid_image
 
-                # Place the valid image in the full image
-                image[
-                    y_offset : y_offset + valid_image.shape[0],
-                    x_offset : x_offset + valid_image.shape[1],
-                ] = valid_image
+        rotated_image = self.image_rotation(image_subset, (radius, radius), yaw)
 
-            # Convert the image to a ROS Image message
-            try:
-                image_msg = self.bridge.cv2_to_imgmsg(image, "bgr8")
-                image_msg.header.stamp = msg.header.stamp
-                image_msg.header.frame_id = (
-                    "camera_frame"  # You might want to create a camera frame
-                )
-                self.image_pub.publish(image_msg)
-            except Exception as e:
-                self.get_logger().error(f"Error converting image: {e}")
+        # Calculate the boundaries of the image
+        center_x = radius
+        center_y = radius
+        x_min = center_x - self.image_width // 2
+        y_min = center_y - self.image_height // 2
+        x_max = center_x + self.image_width // 2
+        y_max = center_y + self.image_height // 2
 
+        # Extract the image from the rotated portion
+        image = rotated_image[y_min:y_max, x_min:x_max]
+
+        # Publish the image
+        try:
+            image_msg = self.bridge.cv2_to_imgmsg(image, "bgr8")
+            image_msg.header.stamp = msg.header.stamp
+            image_msg.header.frame_id = (
+                "camera_frame"  # You might want to create a camera frame
+            )
+            self.image_pub.publish(image_msg)
         except Exception as e:
-            self.get_logger().warn(f"Some error: {e}")
+            self.get_logger().error(f"Error converting image: {e}")
 
 
 def main(args=None):
