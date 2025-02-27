@@ -16,6 +16,7 @@ import rclpy
 from rclpy.callback_groups import MutuallyExclusiveCallbackGroup
 from scipy.spatial.transform import Rotation as R
 from threading import Lock
+from numba import njit
 
 """
 This module contains the class MBVehicleSimulator, which is a simulator for a multi-body vehicle model. It runs on a clock at 100Hz, using scipy odeint to integrate the model forward. The model used is the multi-body model from the CommonRoad vehicle models. The simulator is initialized with a vehicle model, the user can select 1, 2, or 3. The vehicle starts at the origin, with a heading of 0 degrees, and a velocity of 0 m/s. The simulator can be controlled by setting the steering angle and the throttle.
@@ -29,7 +30,55 @@ The control inputs are:
     - u2 = acceleration
 
 """
+@njit(cache=True)
+def pid_steer(steer, current_steer, max_sv):
+    # steering
+    steer_diff = steer - current_steer
+    if np.fabs(steer_diff) > 1e-4:
+        sv = (steer_diff / np.fabs(steer_diff)) * max_sv
+    else:
+        sv = 0.0
 
+    return sv
+
+
+@njit(cache=True)
+def pid_accl(speed, current_speed, max_a, max_v, min_v):
+    """
+    Basic controller for speed/steer -> accl./steer vel.
+
+        Args:
+            speed (float): desired input speed
+            steer (float): desired input steering angle
+
+        Returns:
+            accl (float): desired input acceleration
+            sv (float): desired input steering velocity
+    """
+    # accl
+    vel_diff = speed - current_speed
+    # currently forward
+    if current_speed > 0.0:
+        if vel_diff > 0:
+            # accelerate
+            kp = 10.0 * max_a / max_v
+            accl = kp * vel_diff
+        else:
+            # braking
+            kp = 10.0 * max_a / (-min_v)
+            accl = kp * vel_diff
+    # currently backwards
+    else:
+        if vel_diff > 0:
+            # braking
+            kp = 2.0 * max_a / max_v
+            accl = kp * vel_diff
+        else:
+            # accelerating
+            kp = 2.0 * max_a / (-min_v)
+            accl = kp * vel_diff
+
+    return accl
 
 def integrate_model(state, control_input, parameters, dt=0.01):
     def model_dynamics(x, t, u, p):
@@ -104,9 +153,23 @@ class MBSimulator(Node):
 
     def steer_callback(self, msg):
         """This function sets the control input based on the steering angle and throttle."""
+        print('steer_callback')
+        print("speed:", msg.drive.speed)
         self.control_lock.acquire()
+        steerv = pid_steer(
+            msg.drive.steering_angle, self.state[2], self.parameters.max_sv
+        )
+        accl = pid_accl(
+            msg.drive.speed,
+            self.state[3],
+            self.parameters.max_a,
+            self.parameters.max_v,
+            self.parameters.min_v,
+        )
+        
+        
         self.control_input = np.array(
-            [msg.drive.steering_angle_velocity, msg.drive.acceleration]
+            [steerv, accl]
         )
         self.control_lock.release()
 
