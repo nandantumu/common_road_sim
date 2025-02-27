@@ -14,6 +14,7 @@ from scipy.integrate import odeint
 from rclpy.node import Node
 import rclpy
 from scipy.spatial.transform import Rotation as R
+from threading import Lock
 
 """
 This module contains the class MBVehicleSimulator, which is a simulator for a multi-body vehicle model. It runs on a clock at 100Hz, using scipy odeint to integrate the model forward. The model used is the multi-body model from the CommonRoad vehicle models. The simulator is initialized with a vehicle model, the user can select 1, 2, or 3. The vehicle starts at the origin, with a heading of 0 degrees, and a velocity of 0 m/s. The simulator can be controlled by setting the steering angle and the throttle.
@@ -67,7 +68,7 @@ class MBSimulator(Node):
             raise ValueError("Invalid model selected, please select 1, 2, or 3")
         initial_state = np.array([0, 0, 0, 0, 0, 0, 0])
         self.state = init_mb(initial_state, self.parameters)
-        self.control_input = np.array([0.15, 3 * 9.81])
+        self.control_input = np.array([-0.15, 2 * 9.81])
         self.timer = self.create_timer(1.0 / self.freq, self.timer_callback)
         self.odom_pub = self.create_publisher(Odometry, "/fixposition/odometry", 10)
         self.pose_pub = self.create_publisher(
@@ -77,20 +78,25 @@ class MBSimulator(Node):
         self.control_sub = self.create_subscription(
             AckermannDriveStamped, "/ackermann_cmd", self.steer_callback, 10
         )
+        self.control_lock = Lock()
 
     def timer_callback(self):
         """This function updates the state of the vehicle and publishes the ground truth odometry and pose."""
+        self.control_lock.acquire()
         self.state = integrate_model(
             self.state, self.control_input, self.parameters, 1 / self.freq
         )
         self.publish_pose_and_covariance()
         # print("x:", self.state[0], "y:", self.state[1])
+        self.control_lock.release()
 
     def steer_callback(self, msg):
         """This function sets the control input based on the steering angle and throttle."""
+        self.control_lock.acquire()
         self.control_input = np.array(
             [msg.drive.steering_angle_velocity, msg.drive.acceleration]
         )
+        self.control_lock.release()
 
     def publish_pose_and_covariance(self):
         """This function publishes the ground truth pose of the vehicle."""
