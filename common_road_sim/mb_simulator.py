@@ -86,10 +86,10 @@ class MBSimulator(Node):
         self.state = integrate_model(
             self.state, self.control_input, self.parameters, 1 / self.freq
         )
+        self.control_lock.release()
         self.publish_pose_and_covariance()
         # print("x:", self.state[0], "y:", self.state[1])
-        self.control_lock.release()
-
+        
     def steer_callback(self, msg):
         """This function sets the control input based on the steering angle and throttle."""
         self.control_lock.acquire()
