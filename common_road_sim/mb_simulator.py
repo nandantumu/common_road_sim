@@ -7,12 +7,13 @@ from vehiclemodels.vehicle_dynamics_mb import vehicle_dynamics_mb
 
 from nav_msgs.msg import Odometry
 from geometry_msgs.msg import PoseWithCovarianceStamped, TwistWithCovarianceStamped
-from ackermann_msgs.msg import AckermannDriveStamped, AckermannDrive
+from ackermann_msgs.msg import AckermannDriveStamped
 from sensor_msgs.msg import Imu
 import numpy as np
 from scipy.integrate import odeint
 from rclpy.node import Node
 import rclpy
+from rclpy.callback_groups import MutuallyExclusiveCallbackGroup
 from scipy.spatial.transform import Rotation as R
 from threading import Lock
 
@@ -69,14 +70,24 @@ class MBSimulator(Node):
         initial_state = np.array([0, 0, 0, 0, 0, 0, 0])
         self.state = init_mb(initial_state, self.parameters)
         self.control_input = np.array([-0.15, 2 * 9.81])
-        self.timer = self.create_timer(1.0 / self.freq, self.timer_callback)
+
+        control_cbg = MutuallyExclusiveCallbackGroup()
+        dynamics_cbg = MutuallyExclusiveCallbackGroup()
+
+        self.timer = self.create_timer(
+            1.0 / self.freq, self.timer_callback, callback_group=dynamics_cbg
+        )
         self.odom_pub = self.create_publisher(Odometry, "/fixposition/odometry", 10)
         self.pose_pub = self.create_publisher(
             PoseWithCovarianceStamped, "/ground_truth/pose", 10
         )
         self.imu_pub = self.create_publisher(Imu, "/fixposition/corrimu", 10)
         self.control_sub = self.create_subscription(
-            AckermannDriveStamped, "/ackermann_cmd", self.steer_callback, 10
+            AckermannDriveStamped,
+            "/ackermann_cmd",
+            self.steer_callback,
+            1,
+            callback_group=control_cbg,
         )
         self.control_lock = Lock()
 
