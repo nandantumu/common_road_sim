@@ -83,13 +83,14 @@ class MBSimulator(Node):
     def timer_callback(self):
         """This function updates the state of the vehicle and publishes the ground truth odometry and pose."""
         self.control_lock.acquire()
-        self.state = integrate_model(
-            self.state, self.control_input, self.parameters, 1 / self.freq
-        )
+        control_input = self.control_input.copy()
         self.control_lock.release()
-        self.publish_pose_and_covariance()
+        self.state = integrate_model(
+            self.state, control_input, self.parameters, 1 / self.freq
+        )
+        self.publish_pose_and_covariance(control_input)
         # print("x:", self.state[0], "y:", self.state[1])
-        
+
     def steer_callback(self, msg):
         """This function sets the control input based on the steering angle and throttle."""
         self.control_lock.acquire()
@@ -98,8 +99,10 @@ class MBSimulator(Node):
         )
         self.control_lock.release()
 
-    def publish_pose_and_covariance(self):
+    def publish_pose_and_covariance(self, control_input=None):
         """This function publishes the ground truth pose of the vehicle."""
+        if control_input is None:
+            control_input = self.control_input
         pose_message = PoseWithCovarianceStamped()
         pose_message.header.stamp = self.get_clock().now().to_msg()
         pose_message.header.frame_id = "map"
@@ -132,7 +135,7 @@ class MBSimulator(Node):
         imu_message.angular_velocity.x = self.state[7]
         imu_message.angular_velocity.y = self.state[9]
         imu_message.angular_velocity.z = self.state[5]
-        imu_message.linear_acceleration.x = self.control_input[1]
+        imu_message.linear_acceleration.x = control_input[1]
 
         self.imu_pub.publish(imu_message)
         self.pose_pub.publish(pose_message)
