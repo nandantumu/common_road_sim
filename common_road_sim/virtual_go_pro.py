@@ -4,6 +4,7 @@ from sensor_msgs.msg import Image
 from geometry_msgs.msg import PoseWithCovarianceStamped, PoseStamped
 from cv_bridge import CvBridge
 import cv2
+import tf_transformations
 import numpy as np
 from ament_index_python.packages import get_package_share_directory
 
@@ -61,6 +62,14 @@ class VirtualGoProNode(Node):
 
         self.get_logger().info("Virtual GoPro node initialized.")
 
+    def image_rotation(self, point, angle):
+        """
+        Rotate the image by the specified angle.
+        """
+        rot_matrix = cv2.getRotationMatrix2D(point, angle,1.0)
+        image_out = cv2.warpAffine(self.full_map, rot_matrix, (self.map_width, self.map_height))
+        return image_out
+
     def pose_callback(self, msg):
         """
         Callback function to process the robot's pose and generate a camera image.
@@ -70,6 +79,14 @@ class VirtualGoProNode(Node):
             transform = PoseStamped()
             transform.pose = msg.pose.pose
 
+            #get rotation
+            qx = transform.pose.orientation.x
+            qy = transform.pose.orientation.y
+            qz = transform.pose.orientation.z
+            qw = transform.pose.orientation.w
+            roll, pitch, yaw = tf_transformations.euler_from_quaternion([qx, qy, qz, qw])
+            angle = yaw * 180 / np.pi
+
             # Robot's position in the map frame
             robot_x = transform.pose.position.x
             robot_y = transform.pose.position.y
@@ -77,6 +94,7 @@ class VirtualGoProNode(Node):
             # Calculate the image center in map coordinates
             center_x = int(robot_x * self.pixels_per_meter)
             center_y = int(robot_y * self.pixels_per_meter)
+            point = (center_x, center_y)
 
             # Calculate the boundaries of the image in map coordinates
             half_width = int(self.image_width / 2)
@@ -85,6 +103,9 @@ class VirtualGoProNode(Node):
             y_min = center_y - half_height
             x_max = center_x + half_width
             y_max = center_y + half_height
+            image_out = self.image_rotation(point, -angle)
+
+
 
             # Extract the image from the map
             if (
@@ -93,12 +114,14 @@ class VirtualGoProNode(Node):
                 and x_max < self.map_width
                 and y_max < self.map_height
             ):
-                image = self.full_map[y_min:y_max, x_min:x_max]
+                
+                image = image_out[y_min:y_max, x_min:x_max]
             else:
                 # Handle cases where the camera view extends beyond the map boundaries
                 image = np.zeros(
                     (self.image_height, self.image_width, 3), dtype=np.uint8
                 )
+                print(image.shape)
 
                 # Calculate valid boundaries
                 x_min_valid = max(0, x_min)
@@ -107,7 +130,7 @@ class VirtualGoProNode(Node):
                 y_max_valid = min(self.map_height, y_max)
 
                 # Extract the valid portion of the map
-                valid_image = self.full_map[
+                valid_image = image_out[
                     y_min_valid:y_max_valid, x_min_valid:x_max_valid
                 ]
 
@@ -120,7 +143,7 @@ class VirtualGoProNode(Node):
                     y_offset : y_offset + valid_image.shape[0],
                     x_offset : x_offset + valid_image.shape[1],
                 ] = valid_image
-
+            print("xmin", x_min, "y_min", y_min)
             # Convert the image to a ROS Image message
             try:
                 image_msg = self.bridge.cv2_to_imgmsg(image, "bgr8")
