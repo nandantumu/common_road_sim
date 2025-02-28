@@ -1,11 +1,9 @@
 from vehiclemodels.init_ks import init_ks
-from .vmodels_jnp.parameters import (
-    parameters_vehicle1,
-    parameters_vehicle2,
-    parameters_vehicle3,
-)
+from vehiclemodels.parameters_vehicle1 import parameters_vehicle1
+from vehiclemodels.parameters_vehicle2 import parameters_vehicle2
+from vehiclemodels.parameters_vehicle3 import parameters_vehicle3
 from vehiclemodels.init_mb import init_mb
-from .vmodels_jnp.vehicle_dynamics_mb import vehicle_dynamics_mb
+from vehiclemodels.vehicle_dynamics_mb import vehicle_dynamics_mb
 
 from nav_msgs.msg import Odometry
 from geometry_msgs.msg import PoseWithCovarianceStamped, TwistWithCovarianceStamped
