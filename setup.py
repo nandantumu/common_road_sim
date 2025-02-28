@@ -35,6 +35,7 @@ setup(
         "console_scripts": [
             "mb_simulator = common_road_sim.mb_simulator:main",
             "virtual_go_pro = common_road_sim.virtual_go_pro:main",
+            "controller_simulator = common_road_sim.controller_simulator:main",
         ],
     },
 )
