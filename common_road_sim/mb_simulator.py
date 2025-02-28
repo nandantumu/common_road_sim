@@ -13,8 +13,8 @@ from ackermann_msgs.msg import AckermannDriveStamped
 from sensor_msgs.msg import Imu
 import numpy as np
 
-# from jax.experimental.ode import odeint
-from scipy.integrate import odeint
+from numba import njit
+from scipy.integrate import odeint, solve_ivp
 from rclpy.node import Node
 import rclpy
 from rclpy.callback_groups import MutuallyExclusiveCallbackGroup
@@ -35,6 +35,7 @@ The control inputs are:
 """
 
 
+@njit(cache=True)
 def pid_steer(steer, current_steer, max_sv):
     # steering
     steer_diff = steer - current_steer
@@ -46,6 +47,7 @@ def pid_steer(steer, current_steer, max_sv):
     return sv
 
 
+@njit(cache=True)
 def pid_accl(speed, current_speed, max_a, max_v, min_v):
     """
     Basic controller for speed/steer -> accl./steer vel.
@@ -91,8 +93,16 @@ def integrate_model(state, control_input, parameters, dt=0.01):
 
     # Integrate the model from t=0 to t=dt
     t_span = [0, dt]
-    next_state = odeint(model_dynamics, state, t_span, (control_input, parameters))
-    return next_state[-1]
+    next_state = odeint(
+        model_dynamics,
+        state,
+        t_span,
+        args=(control_input, parameters),
+        rtol=1e-3,
+        atol=1e-3,
+    )[-1]
+
+    return next_state
 
 
 class MBSimulator(Node):
@@ -102,7 +112,7 @@ class MBSimulator(Node):
             namespace="mb_simulator",
             parameters=[
                 ("model", 1),
-                ("frequency", 5),
+                ("frequency", 100),
             ],
         )
         self.freq = (
@@ -147,10 +157,9 @@ class MBSimulator(Node):
 
     def timer_callback(self):
         """This function updates the state of the vehicle and publishes the ground truth odometry and pose."""
-        self.control_lock.acquire()
-        control_input = self.control_input.copy()
+        with self.control_lock:
+            control_input = self.control_input.copy()
         self.get_logger().info(f"Control input: {control_input}")
-        self.control_lock.release()
         self.state = integrate_model(
             self.state, control_input, self.parameters, 1 / self.freq
         )
@@ -187,10 +196,10 @@ class MBSimulator(Node):
         pose_message.pose.pose.position.z = self.state[11]
         r = R.from_euler("z", self.state[4], degrees=False)
         q = r.as_quat()
-        pose_message.pose.pose.orientation.w = q[0]
-        pose_message.pose.pose.orientation.x = q[1]
-        pose_message.pose.pose.orientation.y = q[2]
-        pose_message.pose.pose.orientation.z = q[3]
+        pose_message.pose.pose.orientation.x = q[0]
+        pose_message.pose.pose.orientation.y = q[1]
+        pose_message.pose.pose.orientation.z = q[2]
+        pose_message.pose.pose.orientation.w = q[3]
 
         twist_message = TwistWithCovarianceStamped()
         twist_message.header = pose_message.header

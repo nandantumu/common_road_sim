@@ -1,7 +1,7 @@
 from .acceleration_constraints import acceleration_constraints
 from .steering_constraints import steering_constraints
-from jax import numpy as jnp
-from jax import jit
+import numpy as jnp
+from numba import njit
 
 
 def vehicle_dynamics_ks_cog(x, u_init, p):
@@ -43,9 +43,14 @@ def vehicle_dynamics_ks_cog(x, u_init, p):
     )  # different name u_init/u due to side effects of u
 
     # slip angle (beta) from vehicle kinematics
-    beta = jnp.atan(jnp.tan(x[2]) * p.b / l_wb)
+    f = _core_jit(x, u, p.b, l_wb)
 
-    # system dynamics
+    return f
+
+
+@njit(cache=True)
+def _core_jit(x, u, b, l_wb):
+    beta = jnp.atan(jnp.tan(x[2]) * b / l_wb)
     f = [
         x[3] * jnp.cos(beta + x[4]),
         x[3] * jnp.sin(beta + x[4]),
@@ -53,5 +58,4 @@ def vehicle_dynamics_ks_cog(x, u_init, p):
         u[1],
         x[3] * jnp.cos(beta) * jnp.tan(x[2]) / l_wb,
     ]
-
     return f

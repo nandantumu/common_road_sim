@@ -1,14 +1,14 @@
-from jax import numpy as jnp
-from jax import jit
+import numpy as jnp
+from numba import njit
 
 
-# sign function
-def sign(x):
-    return jnp.sign(x)
+# # sign function
+# def sign(x):
+#     return jnp.sign(x)
 
 
 # longitudinal tire forces
-@jit
+@njit(cache=True)
 def formula_longitudinal(kappa, gamma, F_z, p):
     # turn slip is neglected, so xi_i=1
     # all scaling factors lambda = 1
@@ -16,16 +16,16 @@ def formula_longitudinal(kappa, gamma, F_z, p):
     # coordinate system transformation
     kappa = -kappa
 
-    S_hx = p.p_hx1
-    S_vx = F_z * p.p_vx1
+    S_hx = p["p_hx1"]
+    S_vx = F_z * p["p_vx1"]
 
     kappa_x = kappa + S_hx
-    mu_x = p.p_dx1 * (1 - p.p_dx3 * gamma**2)
+    mu_x = p["p_dx1"] * (1 - p["p_dx3"] * gamma**2)
 
-    C_x = p.p_cx1
+    C_x = p["p_cx1"]
     D_x = mu_x * F_z
-    E_x = p.p_ex1
-    K_x = F_z * p.p_kx1
+    E_x = p["p_ex1"]
+    K_x = F_z * p["p_kx1"]
     B_x = K_x / (C_x * D_x)
 
     # magic tire formula
@@ -36,7 +36,7 @@ def formula_longitudinal(kappa, gamma, F_z, p):
 
 
 # lateral tire forces
-@jit
+@njit(cache=True)
 def formula_lateral(alpha, gamma, F_z, p):
     # turn slip is neglected, so xi_i=1
     # all scaling factors lambda = 1
@@ -44,16 +44,16 @@ def formula_lateral(alpha, gamma, F_z, p):
     # coordinate system transformation
     # alpha = -alpha
 
-    S_hy = sign(gamma) * (p.p_hy1 + p.p_hy3 * jnp.fabs(gamma))
-    S_vy = sign(gamma) * F_z * (p.p_vy1 + p.p_vy3 * jnp.fabs(gamma))
+    S_hy = jnp.sign(gamma) * (p["p_hy1"] + p["p_hy3"] * jnp.fabs(gamma))
+    S_vy = jnp.sign(gamma) * F_z * (p["p_vy1"] + p["p_vy3"] * jnp.fabs(gamma))
 
     alpha_y = alpha + S_hy
-    mu_y = p.p_dy1 * (1 - p.p_dy3 * gamma**2)
+    mu_y = p["p_dy1"] * (1 - p["p_dy3"] * gamma**2)
 
-    C_y = p.p_cy1
+    C_y = p["p_cy1"]
     D_y = mu_y * F_z
-    E_y = p.p_ey1
-    K_y = F_z * p.p_ky1  # simplify K_y0 to p.p_ky1*F_z
+    E_y = p["p_ey1"]
+    K_y = F_z * p["p_ky1"]  # simplify K_y0 to p.p_ky1*F_z
     B_y = K_y / (C_y * D_y)
 
     # magic tire formula
@@ -73,18 +73,18 @@ def formula_lateral(alpha, gamma, F_z, p):
 
 
 # longitudinal tire forces for combined slip
-@jit
+@njit(cache=True)
 def formula_longitudinal_comb(kappa, alpha, F0_x, p):
     # turn slip is neglected, so xi_i=1
     # all scaling factors lambda = 1
 
-    S_hxalpha = p.r_hx1
+    S_hxalpha = p["r_hx1"]
 
     alpha_s = alpha + S_hxalpha
 
-    B_xalpha = p.r_bx1 * jnp.cos(jnp.atan(p.r_bx2 * kappa))
-    C_xalpha = p.r_cx1
-    E_xalpha = p.r_ex1
+    B_xalpha = p["r_bx1"] * jnp.cos(jnp.atan(p["r_bx2"] * kappa))
+    C_xalpha = p["r_cx1"]
+    E_xalpha = p["r_ex1"]
     D_xalpha = F0_x / (
         jnp.cos(
             C_xalpha
@@ -106,18 +106,18 @@ def formula_longitudinal_comb(kappa, alpha, F0_x, p):
 
 
 # lateral tire forces for combined slip
-@jit
+@njit(cache=True)
 def formula_lateral_comb(kappa, alpha, gamma, mu_y, F_z, F0_y, p):
     # turn slip is neglected, so xi_i=1
     # all scaling factors lambda = 1
 
-    S_hykappa = p.r_hy1
+    S_hykappa = p["r_hy1"]
 
     kappa_s = kappa + S_hykappa
 
-    B_ykappa = p.r_by1 * jnp.cos(jnp.atan(p.r_by2 * (alpha - p.r_by3)))
-    C_ykappa = p.r_cy1
-    E_ykappa = p.r_ey1
+    B_ykappa = p["r_by1"] * jnp.cos(jnp.atan(p["r_by2"] * (alpha - p["r_by3"])))
+    C_ykappa = p["r_cy1"]
+    E_ykappa = p["r_ey1"]
     D_ykappa = F0_y / (
         jnp.cos(
             C_ykappa
@@ -129,9 +129,12 @@ def formula_lateral_comb(kappa, alpha, gamma, mu_y, F_z, F0_y, p):
     )
 
     D_vykappa = (
-        mu_y * F_z * (p.r_vy1 + p.r_vy3 * gamma) * jnp.cos(jnp.atan(p.r_vy4 * alpha))
+        mu_y
+        * F_z
+        * (p["r_vy1"] + p["r_vy3"] * gamma)
+        * jnp.cos(jnp.atan(p["r_vy4"] * alpha))
     )
-    S_vykappa = D_vykappa * jnp.sin(p.r_vy5 * jnp.atan(p.r_vy6 * kappa))
+    S_vykappa = D_vykappa * jnp.sin(p["r_vy5"] * jnp.atan(p["r_vy6"] * kappa))
 
     # magic tire formula
     return (

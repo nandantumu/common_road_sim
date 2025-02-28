@@ -4,6 +4,8 @@ from vehiclemodels.parameters_vehicle3 import parameters_vehicle3 as rv3
 from dataclasses import dataclass, field, fields
 from typing import Optional
 from jax.tree_util import register_dataclass
+from numba.typed import Dict
+from numba import types
 
 
 @register_dataclass
@@ -221,11 +223,15 @@ def convert_omegaconf_to_dataclass(omegaconf_dict):
                 getattr(omegaconf_dict, vehicle_property.name),
             )
         elif vehicle_property.name == "steering":
-            sp = SteeringParameters()
+            # sp = SteeringParameters()
+            # for subfield in fields(SteeringParameters):
+            #     setattr(
+            #         sp, subfield.name, getattr(omegaconf_dict.steering, subfield.name)
+            #     )
+            # setattr(vp, "steering", sp)
+            sp = Dict.empty(key_type=types.unicode_type, value_type=types.float64)
             for subfield in fields(SteeringParameters):
-                setattr(
-                    sp, subfield.name, getattr(omegaconf_dict.steering, subfield.name)
-                )
+                sp[subfield.name] = getattr(omegaconf_dict.steering, subfield.name)
             setattr(vp, "steering", sp)
         elif vehicle_property.name == "longitudinal":
             lp = LongitudinalParameters()
@@ -237,9 +243,13 @@ def convert_omegaconf_to_dataclass(omegaconf_dict):
                 )
             setattr(vp, "longitudinal", lp)
         elif vehicle_property.name == "tire":
-            tp = TireParameters()
+            # tp = TireParameters()
+            # for subfield in fields(TireParameters):
+            #     setattr(tp, subfield.name, getattr(omegaconf_dict.tire, subfield.name))
+            # setattr(vp, "tire", tp)
+            tp = Dict.empty(key_type=types.unicode_type, value_type=types.float64)
             for subfield in fields(TireParameters):
-                setattr(tp, subfield.name, getattr(omegaconf_dict.tire, subfield.name))
+                tp[subfield.name] = getattr(omegaconf_dict.tire, subfield.name)
             setattr(vp, "tire", tp)
         elif vehicle_property.name == "trailer":
             tp = TrailerParameters()
