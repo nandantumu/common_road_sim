@@ -106,12 +106,11 @@ class MBSimulator(Node):
             callback_group=control_cbg,
         )
         self.control_lock = Lock()
-        self.get_logger().info("MB Vehicle Simulator running at 100Hz with odeint integration.")
 
     def timer_callback(self):
         with self.control_lock:
             control_input = self.control_input.copy()
-        self.get_logger().info(f"Control input: {control_input}")
+        self.get_logger().debug(f"Control input: {control_input}")
         dt = 1.0 / self.freq
         self.state = integrate_model(self.state, control_input, self.parameters, dt)
         self.publish_pose_and_covariance(control_input)
@@ -129,7 +128,7 @@ class MBSimulator(Node):
         )
         with self.control_lock:
             self.control_input = np.array([steerv, accl])
-        self.get_logger().info(f"Steering: {steerv}, Acceleration: {accl}")
+        self.get_logger().debug(f"Steering: {steerv}, Acceleration: {accl}")
 
     def publish_pose_and_covariance(self, control_input=None):
         if control_input is None:

@@ -7,7 +7,9 @@ import cv2
 import numpy as np
 from ament_index_python.packages import get_package_share_directory
 from scipy.spatial.transform import Rotation as R
+from scipy.interpolate import griddata
 import traceback
+import yaml
 
 #!/usr/bin/env python3
 
@@ -26,6 +28,18 @@ class VirtualGoProNode(Node):
             get_package_share_directory("common_road_sim")
             + "/resource/clark_park/ClarkPark.jpg"
         )
+        self.image_meta_path = (
+            get_package_share_directory("common_road_sim")
+            + "/resource/clark_park/map_metadata.yaml"
+        )
+        # Load metadata
+        try:
+            with open(self.image_meta_path, "r") as file:
+                self.metadata = yaml.safe_load(file)
+            self.get_logger().info(f"Loaded map metadata successfully")
+        except Exception as e:
+            self.get_logger().error(f"Failed to load metadata: {str(e)}")
+            self.metadata = {}
 
         # Load the image
         try:
@@ -56,25 +70,118 @@ class VirtualGoProNode(Node):
 
         # Camera parameters (adjust these based on your desired camera view)
         self.camera_height = 1.5  # Height of the camera above the ground (in meters)
-        self.camera_fov = 60.0  # Field of view in degrees
+        self.camera_fov = np.radians(60.0)  # Field of view in radians
         self.image_width = 640
         self.image_height = 480
-        self.pixels_per_meter = 140  # Adjust this based on your map's scale
+        self.aspect_ratio = self.image_width / self.image_height
+        self.pixels_per_meter = (
+            1.0 / self.metadata["resolution"]
+        )  # Adjust this based on your map's scale
+
+        # The camera is mounted at a fixed height above the ground, facing directly downwards.
+        diagonal = self.camera_height * np.tan(self.camera_fov / 2.0)
+        self.image_width_meters = np.sqrt(
+            (4 * diagonal**2) / (1 + self.aspect_ratio**2)
+        )
+        self.image_height_meters = self.aspect_ratio * self.image_width_meters
+
+        # Relate each pixel value to a location on the map
+        self.map_coords, self.image_coords, self.map_coord_image = self.convert_base_image_to_map_coordinates(
+            self.full_map
+        )
+
+        # Print information about map coordinates
+        self.get_logger().info(f"Map coordinates range: X from {np.min(self.map_coords[:,0]):.2f} to {np.max(self.map_coords[:,0]):.2f} meters")
+        self.get_logger().info(f"Map coordinates range: Y from {np.min(self.map_coords[:,1]):.2f} to {np.max(self.map_coords[:,1]):.2f} meters")
+        self.get_logger().info(f"Pixels per meter: {self.pixels_per_meter:.2f}")
 
         self.get_logger().info("Virtual GoPro node initialized.")
 
-    def image_rotation(self, image, point, angle):
+    def convert_base_image_to_map_coordinates(self, image):
         """
-        Rotate the image by the specified angle.
+        Convert the base image to map coordinates.
+        Instead of (H,W,C), we want (x,y,C) where x and y are in meters.
         """
-        rot_matrix = cv2.getRotationMatrix2D(point, angle, 1.0)
-        image_out = cv2.warpAffine(image, rot_matrix, (self.map_width, self.map_height))
-        return image_out
+        # Create a meshgrid for the image
+        x = np.linspace(0, self.map_width-1, self.map_width)
+        y = np.linspace(0, self.map_height-1, self.map_height)
+        xx, yy = np.meshgrid(x, y)
+
+        # Convert the image to map coordinates
+        map_x = (xx - self.map_width / 2) / self.pixels_per_meter - self.metadata["origin"][0]
+        map_y = (yy - self.map_height / 2) / self.pixels_per_meter - self.metadata["origin"][1]
+
+        # Save the map_coordinates as a 2d array, Npoints x 2
+        map_coords = np.stack([map_x.flatten(), map_y.flatten()], axis=1)
+        image_coords = np.stack([xx.flatten(), yy.flatten()], axis=1)
+
+        # Save the map_image as a 2d array, Npoints x 3, where the points correspond to the map_coords using the image_coords
+        map_coord_image = np.zeros((map_coords.shape[0], 3), dtype=np.uint8)
+        for i in range(map_coords.shape[0]):
+            x = int(image_coords[i, 0])
+            y = int(image_coords[i, 1])
+            map_coord_image[i] = image[y, x]
+        
+        return map_coords, image_coords, map_coord_image
+
+
+    def publish_image(self, image):
+        """
+        Publish the image to the camera/image_raw topic.
+        """
+        try:
+            image_msg = self.bridge.cv2_to_imgmsg(image)
+            image_msg.header.stamp = self.get_clock().now().to_msg()
+            image_msg.header.frame_id = "camera_frame"
+            self.image_pub.publish(image_msg)
+        except Exception as e:
+            self.get_logger().error(f"Error converting image: {e}")
+
+    def get_image_by_box(self, bottom_left, bottom_right, top_left, top_right):
+        """
+        Get the image by the bounding box using interpolation.
+        Note that the coordinates must be valid.
+
+        Args:
+            bottom_left: tuple (x, y) - Bottom-left corner of the bounding box
+            bottom_right: tuple (x, y) - Bottom-right corner of the bounding box
+            top_left: tuple (x, y) - Top-left corner of the bounding box
+            top_right: tuple (x, y) - Top-right corner of the bounding box
+
+        Returns:
+            Image within the specified bounding box
+        """
+        points = np.array([
+            [0,0],  # Bottom Left
+            [0,1],  # Top Left
+            [1,0],  # Bottom Right
+            [1,1]   # Top Right
+        ])
+        values = np.array([
+            bottom_left,
+            top_left,
+            bottom_right,
+            top_right
+        ])
+        x = np.linspace(0, 1, self.image_width)
+        y = np.linspace(0, 1, self.image_height)
+        xx, yy = np.meshgrid(x, y)
+        grid_points = np.stack([xx.flatten(), yy.flatten()], axis=1)
+        image_coords_meters = griddata(points, values, grid_points, method="linear")
+        self.get_logger().info(f"Interpolated image coordinates")
+
+        # For the image coords, get the pixel values:
+        image_data = griddata(self.map_coords, self.map_coord_image, image_coords_meters, method="linear", fill_value=0)
+        image_data = image_data.reshape(self.image_height, self.image_width, 3)
+
+        self.get_logger().info(f"Interpolated image data")
+        return image_data
 
     def pose_callback(self, msg):
         """
         Callback function to process the robot's pose and generate a camera image.
         """
+        self.get_logger().info("Received pose message.")
         # Get the transform from map to base_link
         transform = PoseStamped()
         transform.pose = msg.pose.pose
@@ -94,85 +201,28 @@ class VirtualGoProNode(Node):
         robot_x = transform.pose.position.x
         robot_y = transform.pose.position.y
 
-        # Calculate the image center in map coordinates
-        center_x = int(robot_x * self.pixels_per_meter)
-        center_y = int(robot_y * self.pixels_per_meter)
-        point = (center_x, center_y)
-
-        # Calculate the radius of the image
-        radius = np.sqrt((self.image_width / 2) ** 2 + (self.image_height / 2) ** 2)
-        radius = int(
-            radius * 1.2
-        )  # Increase the radius to ensure the entire image is visible
-        # print("Radius:", radius)
-
-        try:
-            y_low = center_y - radius
-            y_high = center_y + radius
-            x_low = center_x - radius
-            x_high = center_x + radius
-            # print("Indices:", y_low, y_high, x_low, x_high)
-            if (
-                y_low < 0
-                or y_high > self.map_height
-                or x_low < 0
-                or x_high > self.map_width
-            ):
-                raise IndexError("Image subset is out of bounds")
-            else:
-                image_subset = self.full_map[
-                    center_y - radius : center_y + radius,
-                    center_x - radius : center_x + radius,
-                ]
-        except IndexError as e:
-            # Likely problem is that the image subset is out of bounds
-            # We will solve this problem by padding the image with zeros
-            image_subset = np.zeros((2 * radius, 2 * radius, 3), dtype=np.uint8)
-            # Cast the image_subset to a cv2 image
-            image_subset = cv2.cvtColor(image_subset, cv2.COLOR_RGB2BGR)
-            x_min_valid = max(0, center_x - radius)
-            y_min_valid = max(0, center_y - radius)
-            x_max_valid = min(self.map_width, center_x + radius)
-            y_max_valid = min(self.map_height, center_y + radius)
-
-            # Only extract and assign if we have a valid region
-            if y_min_valid < y_max_valid and x_min_valid < x_max_valid:
-                valid_image = self.full_map[
-                    y_min_valid:y_max_valid, x_min_valid:x_max_valid
-                ]
-                x_offset = x_min_valid - (center_x - radius)
-                y_offset = y_min_valid - (center_y - radius)
-
-                # Check that source and target dimensions are valid
-                if valid_image.shape[0] > 0 and valid_image.shape[1] > 0:
-                    image_subset[
-                        y_offset : y_offset + valid_image.shape[0],
-                        x_offset : x_offset + valid_image.shape[1],
-                    ] = valid_image
-
-        rotated_image = self.image_rotation(image_subset, (radius, radius), yaw)
-
-        # Calculate the boundaries of the image
-        center_x = radius
-        center_y = radius
-        x_min = center_x - self.image_width // 2
-        y_min = center_y - self.image_height // 2
-        x_max = center_x + self.image_width // 2
-        y_max = center_y + self.image_height // 2
-
-        # Extract the image from the rotated portion
-        image = rotated_image[y_min:y_max, x_min:x_max]
-
-        # Publish the image
-        try:
-            image_msg = self.bridge.cv2_to_imgmsg(image, "bgr8")
-            image_msg.header.stamp = msg.header.stamp
-            image_msg.header.frame_id = (
-                "camera_frame"  # You might want to create a camera frame
-            )
-            self.image_pub.publish(image_msg)
-        except Exception as e:
-            self.get_logger().error(f"Error converting image: {e}")
+        # The camera is mounted at a fixed height above the ground, facing directly downwards.
+        top_left = (
+            robot_x - self.image_width_meters / 2,
+            robot_y + self.image_height_meters / 2,
+        )
+        top_right = (
+            robot_x + self.image_width_meters / 2,
+            robot_y + self.image_height_meters / 2,
+        )
+        bottom_left = (
+            robot_x - self.image_width_meters / 2,
+            robot_y - self.image_height_meters / 2,
+        )
+        bottom_right = (
+            robot_x + self.image_width_meters / 2,
+            robot_y - self.image_height_meters / 2,
+        )
+        self.get_logger().info(f"Obtained bounding box: {top_left}, {top_right}, {bottom_left}, {bottom_right}")
+        image = self.get_image_by_box(bottom_left, bottom_right, top_left, top_right)
+        # save the image
+        cv2.imwrite("/FrictionEstimation/ros/src/common_road_sim/common_road_sim/virtual_gopro_image.jpg", image)
+        self.publish_image(image)
 
 
 def main(args=None):
