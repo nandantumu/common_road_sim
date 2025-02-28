@@ -1,15 +1,19 @@
 from vehiclemodels.init_ks import init_ks
-from vehiclemodels.parameters_vehicle1 import parameters_vehicle1
-from vehiclemodels.parameters_vehicle2 import parameters_vehicle2
-from vehiclemodels.parameters_vehicle3 import parameters_vehicle3
+from .vmodels_jnp.parameters import (
+    parameters_vehicle1,
+    parameters_vehicle2,
+    parameters_vehicle3,
+)
 from vehiclemodels.init_mb import init_mb
-from vehiclemodels.vehicle_dynamics_mb import vehicle_dynamics_mb
+from .vmodels_jnp.vehicle_dynamics_mb import vehicle_dynamics_mb
 
 from nav_msgs.msg import Odometry
 from geometry_msgs.msg import PoseWithCovarianceStamped, TwistWithCovarianceStamped
 from ackermann_msgs.msg import AckermannDriveStamped
 from sensor_msgs.msg import Imu
 import numpy as np
+
+# from jax.experimental.ode import odeint
 from scipy.integrate import odeint
 from rclpy.node import Node
 import rclpy
@@ -87,7 +91,7 @@ def integrate_model(state, control_input, parameters, dt=0.01):
 
     # Integrate the model from t=0 to t=dt
     t_span = [0, dt]
-    next_state = odeint(model_dynamics, state, t_span, args=(control_input, parameters))
+    next_state = odeint(model_dynamics, state, t_span, (control_input, parameters))
     return next_state[-1]
 
 
@@ -169,7 +173,7 @@ class MBSimulator(Node):
         self.control_lock.acquire()
         self.control_input = np.array([steerv, accl])
         self.control_lock.release()
-        self.get_logger().info(f"Steering: {steerv}, Acceleration: {accl}")
+        # self.get_logger().info(f"Steering: {steerv}, Acceleration: {accl}")
 
     def publish_pose_and_covariance(self, control_input=None):
         """This function publishes the ground truth pose of the vehicle."""
