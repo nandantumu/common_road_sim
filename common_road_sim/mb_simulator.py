@@ -118,7 +118,8 @@ class MBSimulator(Node):
             raise ValueError("Invalid model selected, please select 1, 2, or 3")
         initial_state = np.array([0, 0, 0, 0, 0, 0, 0])
         self.state = init_mb(initial_state, self.parameters)
-        self.control_input = np.array([-0.15, 2 * 9.81])
+        # self.control_input = np.array([-0.15, 2 * 9.81])
+        self.control_input = np.array([0.0, 0.0])
 
         control_cbg = MutuallyExclusiveCallbackGroup()
         dynamics_cbg = MutuallyExclusiveCallbackGroup()
@@ -133,7 +134,7 @@ class MBSimulator(Node):
         self.imu_pub = self.create_publisher(Imu, "/fixposition/corrimu", 10)
         self.control_sub = self.create_subscription(
             AckermannDriveStamped,
-            "/ackermann_cmd",
+            "/drive",
             self.steer_callback,
             1,
             callback_group=control_cbg,
@@ -155,21 +156,21 @@ class MBSimulator(Node):
         """This function sets the control input based on the steering angle and throttle."""
         print('steer_callback')
         print("speed:", msg.drive.speed)
-        self.control_lock.acquire()
         steerv = pid_steer(
-            msg.drive.steering_angle, self.state[2], self.parameters.max_sv
+            msg.drive.steering_angle, self.state[2], self.parameters.steering.v_max
         )
         accl = pid_accl(
             msg.drive.speed,
             self.state[3],
-            self.parameters.max_a,
-            self.parameters.max_v,
-            self.parameters.min_v,
+            self.parameters.longitudinal.a_max,
+            self.parameters.longitudinal.v_max,
+            self.parameters.longitudinal.v_min,
         )
         
         
+        self.control_lock.acquire()
         self.control_input = np.array(
-            [steerv, accl]
+            [steerv, 3.0*9.81]
         )
         self.control_lock.release()
 
