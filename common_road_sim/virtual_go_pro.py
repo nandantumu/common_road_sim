@@ -55,21 +55,112 @@ class VirtualGoProNode(Node):
         self.bridge = CvBridge()
 
         # Camera parameters (adjust these based on your desired camera view)
-        self.camera_height = 1.5  # Height of the camera above the ground (in meters)
+        self.camera_height = 0.5  # Height of the camera above the ground (in meters)
         self.camera_fov = 60.0  # Field of view in degrees
+        self.footprint_size = self._fov_to_footprint(
+            self.camera_height, self.camera_fov
+        )
+
         self.image_width = 640
         self.image_height = 480
         self.pixels_per_meter = 140  # Adjust this based on your map's scale
 
         self.get_logger().info("Virtual GoPro node initialized.")
 
-    def image_rotation(self, image, point, angle):
+    def _fov_to_footprint(self, height, fov_degrees, aspect_ratio=1.0):
         """
-        Rotate the image by the specified angle.
+        Compute the footprint size on the ground given the camera's height, 
+        vertical field-of-view, and sensor aspect ratio.
+        
+        Parameters:
+        height       : The altitude of the camera in meters.
+        fov_degrees  : The vertical field-of-view angle in degrees.
+        aspect_ratio : The sensor aspect ratio (width / height). Default is 1.0 (square).
+        
+        Returns:
+        footprint_size: (width, height) of the ground footprint in meters.
         """
-        rot_matrix = cv2.getRotationMatrix2D(point, angle, 1.0)
-        image_out = cv2.warpAffine(image, rot_matrix, (self.map_width, self.map_height))
-        return image_out
+        # Convert FOV from degrees to radians
+        fov_rad = np.radians(fov_degrees)
+        # Compute the vertical dimension of the footprint.
+        footprint_height = 2 * height * np.tan(fov_rad / 2)
+        # Compute the horizontal dimension using the aspect ratio.
+        footprint_width = footprint_height * aspect_ratio
+        return footprint_width, footprint_height
+    
+    def world_to_image_coords(self, x, y, scale, image_height, world_origin):
+        """
+        Convert world coordinates (meters) to image pixel coordinates.
+        
+        Parameters:
+        x, y         : World coordinates in meters.
+        scale        : Conversion factor (pixels per meter).
+        image_height : Height of the image in pixels (used to flip the y-axis).
+        world_origin : (origin_x, origin_y) location of the image's bottom-left corner in world coordinates.
+        
+        Returns:
+        (px, py)     : Pixel coordinates in the image.
+        """
+        origin_x, origin_y = world_origin
+        px = int((x - origin_x) * scale)
+        py = int(image_height - (y - origin_y) * scale)
+        return px, py
+
+    def simulate_gopro_view(self, large_image, drone_pos, footprint_size, scale, world_origin, angle=0):
+        """
+        Extract the drone's view from the large image.
+        
+        Parameters:
+        large_image   : Numpy array of the large image.
+        drone_pos     : (x, y) drone's center position in world coordinates (meters).
+        footprint_size: (width, height) in meters of the camera's field of view.
+        scale         : Conversion factor (pixels per meter).
+        world_origin  : (origin_x, origin_y) bottom-left corner of the image in world coordinates.
+        angle         : Rotation angle in degrees (yaw) for the camera.
+        
+        Returns:
+        captured_view: The sub-image corresponding to the drone's current view.
+        """
+        img_h, img_w = large_image.shape[:2]
+        
+        # Convert drone's world position to image pixel coordinates.
+        center_px, center_py = self.world_to_image_coords(drone_pos[0], drone_pos[1], scale, img_h, world_origin)
+        
+        half_width_px = (footprint_size[0] * scale) / 2
+        half_height_px = (footprint_size[1] * scale) / 2
+        
+        # For zero rotation, crop a simple rectangle.
+        if angle % 360 == 0:
+            left = int(center_px - half_width_px)
+            right = int(center_px + half_width_px)
+            top = int(center_py - half_height_px)
+            bottom = int(center_py + half_height_px)
+            
+            left = max(left, 0)
+            right = min(right, img_w)
+            top = max(top, 0)
+            bottom = min(bottom, img_h)
+            
+            captured_view = large_image[top:bottom, left:right].copy()
+        else:
+            # Define the rotated rectangle.
+            rect = ((center_px, center_py), (footprint_size[0] * scale, footprint_size[1] * scale), -angle)
+            box = cv2.boxPoints(rect)
+            box = np.int0(box)
+            
+            width = int(footprint_size[0] * scale)
+            height = int(footprint_size[1] * scale)
+            dst_pts = np.array([[0, height - 1],
+                                [0, 0],
+                                [width - 1, 0],
+                                [width - 1, height - 1]], dtype="float32")
+            src_pts = box.astype("float32")
+            
+            # Compute the perspective transform and extract the view.
+            M = cv2.getPerspectiveTransform(src_pts, dst_pts)
+            captured_view = cv2.warpPerspective(large_image, M, (width, height))
+        
+        return captured_view
 
     def pose_callback(self, msg):
         """
@@ -94,74 +185,14 @@ class VirtualGoProNode(Node):
         robot_x = transform.pose.position.x
         robot_y = transform.pose.position.y
 
-        # Calculate the image center in map coordinates
-        center_x = int(robot_x * self.pixels_per_meter)
-        center_y = int(robot_y * self.pixels_per_meter)
-        point = (center_x, center_y)
+        # Get the image
+        image = self.simulate_gopro_view(self.full_map, 
+                                         [robot_x, robot_y], 
+                                         self.footprint_size, 
+                                         self.pixels_per_meter, 
+                                         (0,0), 
+                                         yaw)
 
-        # Calculate the radius of the image
-        radius = np.sqrt((self.image_width / 2) ** 2 + (self.image_height / 2) ** 2)
-        radius = int(
-            radius * 1.2
-        )  # Increase the radius to ensure the entire image is visible
-        # print("Radius:", radius)
-
-        try:
-            y_low = center_y - radius
-            y_high = center_y + radius
-            x_low = center_x - radius
-            x_high = center_x + radius
-            # print("Indices:", y_low, y_high, x_low, x_high)
-            if (
-                y_low < 0
-                or y_high > self.map_height
-                or x_low < 0
-                or x_high > self.map_width
-            ):
-                raise IndexError("Image subset is out of bounds")
-            else:
-                image_subset = self.full_map[
-                    center_y - radius : center_y + radius,
-                    center_x - radius : center_x + radius,
-                ]
-        except IndexError as e:
-            # Likely problem is that the image subset is out of bounds
-            # We will solve this problem by padding the image with zeros
-            image_subset = np.zeros((2 * radius, 2 * radius, 3), dtype=np.uint8)
-            # Cast the image_subset to a cv2 image
-            image_subset = cv2.cvtColor(image_subset, cv2.COLOR_RGB2BGR)
-            x_min_valid = max(0, center_x - radius)
-            y_min_valid = max(0, center_y - radius)
-            x_max_valid = min(self.map_width, center_x + radius)
-            y_max_valid = min(self.map_height, center_y + radius)
-
-            # Only extract and assign if we have a valid region
-            if y_min_valid < y_max_valid and x_min_valid < x_max_valid:
-                valid_image = self.full_map[
-                    y_min_valid:y_max_valid, x_min_valid:x_max_valid
-                ]
-                x_offset = x_min_valid - (center_x - radius)
-                y_offset = y_min_valid - (center_y - radius)
-
-                # Check that source and target dimensions are valid
-                if valid_image.shape[0] > 0 and valid_image.shape[1] > 0:
-                    image_subset[
-                        y_offset : y_offset + valid_image.shape[0],
-                        x_offset : x_offset + valid_image.shape[1],
-                    ] = valid_image
-
-        rotated_image = self.image_rotation(image_subset, (radius, radius), yaw)
-
-        # Calculate the boundaries of the image
-        center_x = radius
-        center_y = radius
-        x_min = center_x - self.image_width // 2
-        y_min = center_y - self.image_height // 2
-        x_max = center_x + self.image_width // 2
-        y_max = center_y + self.image_height // 2
-
-        # Extract the image from the rotated portion
-        image = rotated_image[y_min:y_max, x_min:x_max]
 
         # Publish the image
         try:
