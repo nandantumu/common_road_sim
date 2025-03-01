@@ -129,25 +129,25 @@ class VirtualGoProNode(Node):
         py = int(image_height - (y - origin_y) * scale)
         return px, py
 
-    def simulate_gopro_view(self, large_image, drone_pos, footprint_size, scale, world_origin, angle=0):
+    def simulate_gopro_view(self, large_image, gopro_pos, footprint_size, scale, world_origin, angle=0):
         """
-        Extract the drone's view from the large image.
+        Extract the gopro's view from the large image.
         
         Parameters:
         large_image   : Numpy array of the large image.
-        drone_pos     : (x, y) drone's center position in world coordinates (meters).
+        vehicle_pose  : (x, y) gopro's center position in world coordinates (meters).
         footprint_size: (width, height) in meters of the camera's field of view.
         scale         : Conversion factor (pixels per meter).
         world_origin  : (origin_x, origin_y) bottom-left corner of the image in world coordinates.
         angle         : Rotation angle in degrees (yaw) for the camera.
         
         Returns:
-        captured_view: The sub-image corresponding to the drone's current view.
+        captured_view: The sub-image corresponding to the gopro's current view.
         """
         img_h, img_w = large_image.shape[:2]
         
-        # Convert drone's world position to image pixel coordinates.
-        center_px, center_py = self.world_to_image_coords(drone_pos[0], drone_pos[1], scale, img_h, world_origin)
+        # Convert gopro's world position to image pixel coordinates.
+        center_px, center_py = self.world_to_image_coords(gopro_pos[0], gopro_pos[1], scale, img_h, world_origin)
         
         half_width_px = (footprint_size[0] * scale) / 2
         half_height_px = (footprint_size[1] * scale) / 2
