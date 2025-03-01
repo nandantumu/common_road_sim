@@ -8,6 +8,7 @@ import numpy as np
 from ament_index_python.packages import get_package_share_directory
 from scipy.spatial.transform import Rotation as R
 import traceback
+import yaml
 
 #!/usr/bin/env python3
 
@@ -21,10 +22,33 @@ class VirtualGoProNode(Node):
 
         # self.declare_parameter("camera_info_url", "")  # Optional: URL for camera info
 
+        self.map_metadata = (
+            get_package_share_directory("common_road_sim")
+            + "/resource/clark_park/map_metadata.yaml"
+        )
+
+        # Parse the map metadata
+        try:
+            with open(self.map_metadata, "r") as f:
+                metadata = yaml.safe_load(f)
+                self.map_origin = (metadata["origin"][:2]) # We only care about x and y
+                self.pixels_per_meter = 1/metadata["resolution"] # pixels per meter instead of meters per pixel
+                self.map_height = metadata["height"]
+                self.map_width = metadata["width"]
+                self.image_name = metadata["image"]
+                self.get_logger().info(
+                    f"{self.image_name} metadata: origin={self.map_origin}, resolution={1/self.pixels_per_meter}, "
+                    f"width={self.map_width}, height={self.map_height}"
+                )
+        except Exception as e:
+            self.get_logger().error(f"Error parsing map metadata: {e}")
+            rclpy.shutdown()
+            return
+        
         # Get parameters
         self.image_path = (
             get_package_share_directory("common_road_sim")
-            + "/resource/clark_park/ClarkPark.jpg"
+            + "/resource/clark_park/" + self.image_name
         )
 
         # Load the image
@@ -63,7 +87,6 @@ class VirtualGoProNode(Node):
 
         self.image_width = 640
         self.image_height = 480
-        self.pixels_per_meter = 140  # Adjust this based on your map's scale
 
         self.get_logger().info("Virtual GoPro node initialized.")
 

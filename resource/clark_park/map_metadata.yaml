@@ -1,5 +1,5 @@
-image: clark_park_greyscale.pgm
-resolution: 0.00879
+image: ClarkPark.jpg
+resolution: 0.007142857
 origin: [-15,-15, 0.000000]
 negate: 0
 width: 4573
