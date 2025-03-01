@@ -212,8 +212,8 @@ class VirtualGoProNode(Node):
         image = self.simulate_gopro_view(self.full_map, 
                                          [robot_x, robot_y], 
                                          self.footprint_size, 
-                                         self.pixels_per_meter, 
-                                         (0,0), 
+                                         self.pixels_per_meter,
+                                         self.map_origin, 
                                          yaw)
 
 
