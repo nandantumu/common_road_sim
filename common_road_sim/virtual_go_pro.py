@@ -31,13 +31,16 @@ class VirtualGoProNode(Node):
         try:
             with open(self.map_metadata, "r") as f:
                 metadata = yaml.safe_load(f)
-                self.map_origin = (metadata["origin"][:2]) # We only care about x and y
+                # These are the [u,v] pixel coordinates and accompanying [x,y] world coordinates of the reference pixel
+                self.reference = (metadata["reference"][:2])
+                self.reference_position = (metadata["reference_position"][:2]) # We only care about x and y
+
                 self.pixels_per_meter = 1/metadata["resolution"] # pixels per meter instead of meters per pixel
                 self.map_height = metadata["height"]
                 self.map_width = metadata["width"]
                 self.image_name = metadata["image"]
                 self.get_logger().info(
-                    f"{self.image_name} metadata: origin={self.map_origin}, resolution={1/self.pixels_per_meter}, "
+                    f"{self.image_name} metadata: origin={self.reference_position}, reference={self.reference}, resolution={1/self.pixels_per_meter}, "
                     f"width={self.map_width}, height={self.map_height}"
                 )
         except Exception as e:
@@ -79,7 +82,7 @@ class VirtualGoProNode(Node):
         self.bridge = CvBridge()
 
         # Camera parameters (adjust these based on your desired camera view)
-        self.camera_height = 0.5  # Height of the camera above the ground (in meters)
+        self.camera_height = 2.5  # Height of the camera above the ground (in meters)
         self.camera_fov = 60.0  # Field of view in degrees
         self.footprint_size = self._fov_to_footprint(
             self.camera_height, self.camera_fov
@@ -111,25 +114,26 @@ class VirtualGoProNode(Node):
         footprint_width = footprint_height * aspect_ratio
         return footprint_width, footprint_height
     
-    def world_to_image_coords(self, x, y, scale, image_height, world_origin):
+    def world_to_image_coords(self, x, y, scale, image_height, ref_pixel_coord, ref_pixel):
         """
         Convert world coordinates (meters) to image pixel coordinates.
         
         Parameters:
-        x, y         : World coordinates in meters.
-        scale        : Conversion factor (pixels per meter).
-        image_height : Height of the image in pixels (used to flip the y-axis).
-        world_origin : (origin_x, origin_y) location of the image's bottom-left corner in world coordinates.
+        x, y            : World coordinates in meters.
+        scale           : Conversion factor (pixels per meter).
+        image_height    : Height of the image in pixels (used to flip the y-axis).
+        ref_pixel_coord : (origin_x, origin_y) location of the image's reference pixel in world coordinates.
+        ref_pixel       : (u, v) location of the image's reference pixel in pixel coordinates.
         
         Returns:
         (px, py)     : Pixel coordinates in the image.
         """
-        origin_x, origin_y = world_origin
-        px = int((x - origin_x) * scale)
-        py = int(image_height - (y - origin_y) * scale)
-        return px, py
+        print(f"scale: {scale} , image_height: {image_height} , ref_pixel_coord: {ref_pixel_coord} , ref_pixel: {ref_pixel}", flush=True)
+        px = ref_pixel[0] + scale * (x - ref_pixel_coord[0])
+        py = image_height - (ref_pixel[1] + scale * (y - ref_pixel_coord[1]))
+        return int(px), int(py)
 
-    def simulate_gopro_view(self, large_image, gopro_pos, footprint_size, scale, world_origin, angle=0):
+    def simulate_gopro_view(self, large_image, gopro_pos, footprint_size, scale, reference_pix, reference_pos, angle=0):
         """
         Extract the gopro's view from the large image.
         
@@ -138,7 +142,8 @@ class VirtualGoProNode(Node):
         vehicle_pose  : (x, y) gopro's center position in world coordinates (meters).
         footprint_size: (width, height) in meters of the camera's field of view.
         scale         : Conversion factor (pixels per meter).
-        world_origin  : (origin_x, origin_y) bottom-left corner of the image in world coordinates.
+        reference_pix : (u, v) location of the image's reference pixel in pixel coordinates.
+        reference_pos : (origin_x, origin_y) reference pixel location in world coordinates.
         angle         : Rotation angle in degrees (yaw) for the camera.
         
         Returns:
@@ -147,7 +152,7 @@ class VirtualGoProNode(Node):
         img_h, img_w = large_image.shape[:2]
         
         # Convert gopro's world position to image pixel coordinates.
-        center_px, center_py = self.world_to_image_coords(gopro_pos[0], gopro_pos[1], scale, img_h, world_origin)
+        center_px, center_py = self.world_to_image_coords(gopro_pos[0], gopro_pos[1], scale, img_h, reference_pos, reference_pix)
         
         half_width_px = (footprint_size[0] * scale) / 2
         half_height_px = (footprint_size[1] * scale) / 2
@@ -213,7 +218,8 @@ class VirtualGoProNode(Node):
                                          [robot_x, robot_y], 
                                          self.footprint_size, 
                                          self.pixels_per_meter,
-                                         self.map_origin, 
+                                         self.reference,
+                                         self.reference_position,
                                          yaw)
 
 
