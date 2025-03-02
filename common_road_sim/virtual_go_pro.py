@@ -128,7 +128,6 @@ class VirtualGoProNode(Node):
         Returns:
         (px, py)     : Pixel coordinates in the image.
         """
-        print(f"scale: {scale} , image_height: {image_height} , ref_pixel_coord: {ref_pixel_coord} , ref_pixel: {ref_pixel}", flush=True)
         px = ref_pixel[0] + scale * (x - ref_pixel_coord[0])
         py = image_height - (ref_pixel[1] + scale * (y - ref_pixel_coord[1]))
         return int(px), int(py)
