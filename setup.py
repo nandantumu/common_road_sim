@@ -14,6 +14,10 @@ setup(
             os.path.join("share", package_name, "resource/clark_park"),
             glob("resource/clark_park/*"),
         ),
+        (
+            os.path.join("share", package_name, "resource/textures"),
+            glob("resource/textures/*"),
+        ),
         ("share/" + package_name, ["package.xml"]),
         (os.path.join("share", package_name, "launch"), glob("launch/*.py")),
     ],
