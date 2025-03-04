@@ -1,6 +1,7 @@
-image: clark_park_greyscale.pgm
-resolution: 0.00879
-origin: [-15,-15, 0.000000]
+image: ClarkPark.jpg
+resolution: 0.007142857
+reference: [1100, 1125, 0.000000] # Pixel coordinates of the reference point
+reference_position: [0,0, 0.000000] # Real world coordinates of the reference point
 negate: 0
 width: 4573
 height: 3994

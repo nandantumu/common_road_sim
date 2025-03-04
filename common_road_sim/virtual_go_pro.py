@@ -8,6 +8,7 @@ import numpy as np
 from ament_index_python.packages import get_package_share_directory
 from scipy.spatial.transform import Rotation as R
 import traceback
+import yaml
 
 #!/usr/bin/env python3
 
@@ -21,26 +22,35 @@ class VirtualGoProNode(Node):
 
         # self.declare_parameter("camera_info_url", "")  # Optional: URL for camera info
 
-        # Get parameters
-        self.image_path = (
+        self.map_metadata = (
             get_package_share_directory("common_road_sim")
-            + "/resource/clark_park/ClarkPark.jpg"
+            + "/resource/textures/map_metadata.yaml"
         )
+        self.texture_images = []
 
-        # Load the image
+        # Parse the map metadata
         try:
-            self.full_map = cv2.imread(self.image_path)
-            if self.full_map is None:
-                raise FileNotFoundError(f"Could not load image from {self.image_path}")
-            self.map_height, self.map_width, _ = self.full_map.shape
-            self.get_logger().info(
-                f"Loaded map image with dimensions: {self.map_width}x{self.map_height}"
-            )
-        except FileNotFoundError as e:
-            self.get_logger().error(str(e))
+            with open(self.map_metadata, "r") as f:
+                metadata = yaml.safe_load(f)
+                # These are the (x,y) coordinates of the center slpitter for textures
+                self.center_coordinate = (metadata["center_coordinate"])
+                self.texture_list = metadata["texture_list"]
+                for texture in self.texture_list:
+                    texture_path = (
+                        get_package_share_directory("common_road_sim")
+                        + "/resource/textures/" + texture
+                    )
+                    loaded_texture = cv2.imread(texture_path)
+                    if loaded_texture is None:
+                        self.get_logger().error(f"Failed to load texture image at {texture_path}")
+                    else:
+                        self.texture_images.append(loaded_texture)
+
+        except Exception as e:
+            self.get_logger().error(f"Error parsing map metadata: {e}")
             rclpy.shutdown()
             return
-
+        
         # Initialize publishers and subscribers
         self.image_pub = self.create_publisher(Image, "camera/image_raw", 10)
         self.pose_sub = self.create_subscription(
@@ -54,22 +64,43 @@ class VirtualGoProNode(Node):
         # Initialize CV Bridge
         self.bridge = CvBridge()
 
-        # Camera parameters (adjust these based on your desired camera view)
-        self.camera_height = 1.5  # Height of the camera above the ground (in meters)
-        self.camera_fov = 60.0  # Field of view in degrees
         self.image_width = 640
         self.image_height = 480
-        self.pixels_per_meter = 140  # Adjust this based on your map's scale
 
         self.get_logger().info("Virtual GoPro node initialized.")
 
-    def image_rotation(self, image, point, angle):
+    def simulate_gopro_view(self, gopro_pos, angle=0):
         """
-        Rotate the image by the specified angle.
+        Extract the gopro's view from the large image.
+        
+        Parameters:
+        gopro_pos     : (x, y) gopro's center position in world coordinates (meters).
+        angle         : Rotation angle in radians (yaw) for the camera.
+        
+        Returns:
+        captured_view: The sub-image corresponding to the gopro's current view.
         """
-        rot_matrix = cv2.getRotationMatrix2D(point, angle, 1.0)
-        image_out = cv2.warpAffine(image, rot_matrix, (self.map_width, self.map_height))
-        return image_out
+        gopro_x, gopro_y = gopro_pos
+        # Get the texture corresponding to the gopro's position
+        if gopro_x < self.center_coordinate[0]:
+            if gopro_y < self.center_coordinate[1]:
+                texture = self.texture_images[0]
+            else:
+                texture = self.texture_images[1]
+        else:
+            if gopro_y < self.center_coordinate[1]:
+                texture = self.texture_images[2]
+            else:
+                texture = self.texture_images[3]
+
+        # Get the gopro's view
+        # Rotate the texture to match the gopro's orientation
+        rows, cols, _ = texture.shape
+        M = cv2.getRotationMatrix2D((cols / 2, rows / 2), np.degrees(angle), 1)
+        rotated_texture = cv2.warpAffine(texture, M, (cols, rows), borderMode=cv2.BORDER_WRAP)
+        captured_view = cv2.resize(rotated_texture, (self.image_width, self.image_height), interpolation=cv2.INTER_AREA)
+        
+        return captured_view
 
     def pose_callback(self, msg):
         """
@@ -94,74 +125,10 @@ class VirtualGoProNode(Node):
         robot_x = transform.pose.position.x
         robot_y = transform.pose.position.y
 
-        # Calculate the image center in map coordinates
-        center_x = int(robot_x * self.pixels_per_meter)
-        center_y = int(robot_y * self.pixels_per_meter)
-        point = (center_x, center_y)
+        # Get the image
+        image = self.simulate_gopro_view([robot_x, robot_y],
+                                         yaw)
 
-        # Calculate the radius of the image
-        radius = np.sqrt((self.image_width / 2) ** 2 + (self.image_height / 2) ** 2)
-        radius = int(
-            radius * 1.2
-        )  # Increase the radius to ensure the entire image is visible
-        # print("Radius:", radius)
-
-        try:
-            y_low = center_y - radius
-            y_high = center_y + radius
-            x_low = center_x - radius
-            x_high = center_x + radius
-            # print("Indices:", y_low, y_high, x_low, x_high)
-            if (
-                y_low < 0
-                or y_high > self.map_height
-                or x_low < 0
-                or x_high > self.map_width
-            ):
-                raise IndexError("Image subset is out of bounds")
-            else:
-                image_subset = self.full_map[
-                    center_y - radius : center_y + radius,
-                    center_x - radius : center_x + radius,
-                ]
-        except IndexError as e:
-            # Likely problem is that the image subset is out of bounds
-            # We will solve this problem by padding the image with zeros
-            image_subset = np.zeros((2 * radius, 2 * radius, 3), dtype=np.uint8)
-            # Cast the image_subset to a cv2 image
-            image_subset = cv2.cvtColor(image_subset, cv2.COLOR_RGB2BGR)
-            x_min_valid = max(0, center_x - radius)
-            y_min_valid = max(0, center_y - radius)
-            x_max_valid = min(self.map_width, center_x + radius)
-            y_max_valid = min(self.map_height, center_y + radius)
-
-            # Only extract and assign if we have a valid region
-            if y_min_valid < y_max_valid and x_min_valid < x_max_valid:
-                valid_image = self.full_map[
-                    y_min_valid:y_max_valid, x_min_valid:x_max_valid
-                ]
-                x_offset = x_min_valid - (center_x - radius)
-                y_offset = y_min_valid - (center_y - radius)
-
-                # Check that source and target dimensions are valid
-                if valid_image.shape[0] > 0 and valid_image.shape[1] > 0:
-                    image_subset[
-                        y_offset : y_offset + valid_image.shape[0],
-                        x_offset : x_offset + valid_image.shape[1],
-                    ] = valid_image
-
-        rotated_image = self.image_rotation(image_subset, (radius, radius), yaw)
-
-        # Calculate the boundaries of the image
-        center_x = radius
-        center_y = radius
-        x_min = center_x - self.image_width // 2
-        y_min = center_y - self.image_height // 2
-        x_max = center_x + self.image_width // 2
-        y_max = center_y + self.image_height // 2
-
-        # Extract the image from the rotated portion
-        image = rotated_image[y_min:y_max, x_min:x_max]
 
         # Publish the image
         try:
