@@ -154,14 +154,14 @@ class MBSimulator(Node):
 
     def steer_callback(self, msg):
         steerv = pid_steer(
-            msg.drive.steering_angle, self.state[2], self.parameters.steering.v_max
+            msg.drive.steering_angle, self.state[2], self.parameters["steering.v_max"]
         )
         accl = pid_accl(
             msg.drive.speed,
             self.state[3],
-            self.parameters.longitudinal.a_max,
-            self.parameters.longitudinal.v_max,
-            self.parameters.longitudinal.v_min,
+            self.parameters["longitudinal.a_max"],
+            self.parameters["longitudinal.v_max"],
+            self.parameters["longitudinal.v_min"],
         )
 
         self.control_lock.acquire()
