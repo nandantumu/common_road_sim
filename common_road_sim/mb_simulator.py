@@ -92,7 +92,7 @@ class MBSimulator(Node):
             namespace="mb_simulator",
             parameters=[
                 ("model", 1),
-                ("frequency", 200),
+                ("frequency", 100),
             ],
         )
         self.freq = (
