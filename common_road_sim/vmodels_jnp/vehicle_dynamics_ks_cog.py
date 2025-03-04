@@ -4,6 +4,7 @@ import numpy as jnp
 from numba import njit
 
 
+@njit(cache=True)
 def vehicle_dynamics_ks_cog(x, u_init, p):
     """
     vehicle_dynamics_ks_cog - kinematic single-track vehicle dynamics
@@ -30,32 +31,26 @@ def vehicle_dynamics_ks_cog(x, u_init, p):
     # x5 = yaw angle
 
     # wheelbase
-    l_wb = p.a + p.b
+    l_wb = p["a"] + p["b"]
 
     # consider steering constraints
-    u = []
-    u.append(
-        steering_constraints(x[2], u_init[0], p.steering)
-    )  # different name u_init/u due to side effects of u
-    # consider acceleration constraints
-    u.append(
-        acceleration_constraints(x[3], u_init[1], p.longitudinal)
-    )  # different name u_init/u due to side effects of u
+    # u = []
+    # u.append(
+    #     steering_constraints(x[2], u_init[0], p)
+    # )  # different name u_init/u due to side effects of u
+    # # consider acceleration constraints
+    # u.append(
+    #     acceleration_constraints(x[3], u_init[1], p)
+    # )  # different name u_init/u due to side effects of u
 
     # slip angle (beta) from vehicle kinematics
-    f = _core_jit(x, u, p.b, l_wb)
 
-    return f
-
-
-@njit(cache=True)
-def _core_jit(x, u, b, l_wb):
-    beta = jnp.atan(jnp.tan(x[2]) * b / l_wb)
+    beta = jnp.arctan(jnp.tan(x[2]) * p["b"] / l_wb)
     f = [
         x[3] * jnp.cos(beta + x[4]),
         x[3] * jnp.sin(beta + x[4]),
-        u[0],
-        u[1],
+        u_init[0],
+        u_init[1],
         x[3] * jnp.cos(beta) * jnp.tan(x[2]) / l_wb,
     ]
     return f

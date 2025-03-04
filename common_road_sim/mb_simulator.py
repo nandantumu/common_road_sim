@@ -1,10 +1,10 @@
-from vehiclemodels.init_ks import init_ks
+from .vmodels_jnp.init_ks import init_ks
 from .vmodels_jnp.parameters import (
     parameters_vehicle1,
     parameters_vehicle2,
     parameters_vehicle3,
 )
-from vehiclemodels.init_mb import init_mb
+from .vmodels_jnp.init_mb import init_mb
 from .vmodels_jnp.vehicle_dynamics_mb import vehicle_dynamics_mb
 
 from nav_msgs.msg import Odometry
@@ -15,6 +15,7 @@ import numpy as np
 
 from numba import njit
 from scipy.integrate import odeint, solve_ivp
+import rclpy
 from rclpy.node import Node
 from rclpy.callback_groups import MutuallyExclusiveCallbackGroup
 from scipy.integrate import odeint
@@ -62,12 +63,15 @@ def pid_accl(speed, current_speed, max_a, max_v, min_v):
             kp = FS_MOD * 2.0 * max_a / (-min_v)
             return kp * vel_diff
 
+
 def integrate_model(state, control_input, parameters, dt):
     """
     Integrate the vehicle dynamics using SciPy's odeint over the interval [0, dt].
     """
+
     def model_dynamics(x, t, u, p):
         return vehicle_dynamics_mb(x, u, p)
+
     t_span = [0, dt]
     next_state = odeint(
         model_dynamics,
@@ -80,6 +84,7 @@ def integrate_model(state, control_input, parameters, dt):
 
     return next_state
 
+
 class MBSimulator(Node):
     def __init__(self):
         super().__init__("mb_simulator")
@@ -87,12 +92,18 @@ class MBSimulator(Node):
             namespace="mb_simulator",
             parameters=[
                 ("model", 1),
-                ("frequency", 100),
+                ("frequency", 200),
             ],
         )
-        self.freq = self.get_parameter("mb_simulator.frequency").get_parameter_value().integer_value
-        self.model = self.get_parameter("mb_simulator.model").get_parameter_value().integer_value
-        
+        self.freq = (
+            self.get_parameter("mb_simulator.frequency")
+            .get_parameter_value()
+            .integer_value
+        )
+        self.model = (
+            self.get_parameter("mb_simulator.model").get_parameter_value().integer_value
+        )
+
         if self.model == 1:
             self.parameters = parameters_vehicle1()
         elif self.model == 2:
@@ -101,19 +112,23 @@ class MBSimulator(Node):
             self.parameters = parameters_vehicle3()
         else:
             raise ValueError("Invalid model selected, please select 1, 2, or 3")
-        
+
         # Initialize state vector; here we assume a 7-dimensional state.
         initial_state = np.array([0, 0, 0, 0, 0, 0, 0])
         self.state = init_mb(initial_state, self.parameters)
         # Initialize with a nonzero control input so the vehicle can move.
         self.control_input = np.array([1.0, 1.0])
-        
+
         control_cbg = MutuallyExclusiveCallbackGroup()
         dynamics_cbg = MutuallyExclusiveCallbackGroup()
-        
-        self.timer = self.create_timer(1.0 / self.freq, self.timer_callback, callback_group=dynamics_cbg)
+
+        self.timer = self.create_timer(
+            1.0 / self.freq, self.timer_callback, callback_group=dynamics_cbg
+        )
         self.odom_pub = self.create_publisher(Odometry, "/fixposition/odometry", 10)
-        self.pose_pub = self.create_publisher(PoseWithCovarianceStamped, "/ground_truth/pose", 10)
+        self.pose_pub = self.create_publisher(
+            PoseWithCovarianceStamped, "/ground_truth/pose", 10
+        )
         self.imu_pub = self.create_publisher(Imu, "/fixposition/corrimu", 10)
         self.control_sub = self.create_subscription(
             AckermannDriveStamped,
@@ -123,7 +138,9 @@ class MBSimulator(Node):
             callback_group=control_cbg,
         )
         self.control_lock = Lock()
-        self.get_logger().info("MB Vehicle Simulator running at 100Hz with odeint integration.")
+        self.get_logger().info(
+            "MB Vehicle Simulator running at 100Hz with odeint integration."
+        )
 
     def timer_callback(self):
         """This function updates the state of the vehicle and publishes the ground truth odometry and pose."""
@@ -161,8 +178,10 @@ class MBSimulator(Node):
         pose_message.pose.pose.position.x = self.state[0]
         pose_message.pose.pose.position.y = self.state[1]
         # Use state[11] for z, if available.
-        pose_message.pose.pose.position.z = self.state[11] if len(self.state) > 11 else 0.0
-        
+        pose_message.pose.pose.position.z = (
+            self.state[11] if len(self.state) > 11 else 0.0
+        )
+
         # Convert Euler (z rotation) to quaternion.
         r = R.from_euler("z", self.state[4], degrees=False)
         q = r.as_quat()  # q is [x, y, z, w]
@@ -199,11 +218,13 @@ class MBSimulator(Node):
         self.pose_pub.publish(pose_message)
         self.odom_pub.publish(odom_message)
 
+
 def main(args=None):
     rclpy.init(args=args)
     simulator = MBSimulator()
     rclpy.spin(simulator)
     rclpy.shutdown()
+
 
 if __name__ == "__main__":
     main()

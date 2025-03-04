@@ -3,12 +3,10 @@ from vehiclemodels.parameters_vehicle2 import parameters_vehicle2 as rv2
 from vehiclemodels.parameters_vehicle3 import parameters_vehicle3 as rv3
 from dataclasses import dataclass, field, fields
 from typing import Optional
-from jax.tree_util import register_dataclass
 from numba.typed import Dict
 from numba import types
 
 
-@register_dataclass
 @dataclass
 class LongitudinalParameters:
     """
@@ -24,7 +22,6 @@ class LongitudinalParameters:
     j_dot_max: Optional[float] = None  # maximum change of longitudinal jerk [m/s^4]
 
 
-@register_dataclass
 @dataclass
 class SteeringParameters:
     """
@@ -40,7 +37,6 @@ class SteeringParameters:
     kappa_dot_dot_max: Optional[float] = None  # maximum curvature rate rate
 
 
-@register_dataclass
 @dataclass
 class TireParameters:
     """
@@ -85,7 +81,6 @@ class TireParameters:
     r_vy6: Optional[float] = None  # Variation of Svyk/Muy*Fz with atan(kappa)
 
 
-@register_dataclass
 @dataclass
 class TrailerParameters:
     """
@@ -100,7 +95,6 @@ class TrailerParameters:
     l_wb: Optional[float] = None  # trailer wheel base [m]
 
 
-@register_dataclass
 @dataclass
 class VehicleParameters:
     """
@@ -214,50 +208,40 @@ def convert_omegaconf_to_dataclass(omegaconf_dict):
     """
     Convert OmegaConf dictionary to dataclass
     """
-    vp = VehicleParameters()
+    vp = Dict.empty(key_type=types.unicode_type, value_type=types.float64)
     for vehicle_property in fields(VehicleParameters):
         if vehicle_property.name not in ["steering", "longitudinal", "tire", "trailer"]:
-            setattr(
-                vp,
-                vehicle_property.name,
-                getattr(omegaconf_dict, vehicle_property.name),
-            )
+            item_value = getattr(omegaconf_dict, vehicle_property.name)
+            if item_value is not None:
+                vp[vehicle_property.name] = item_value
         elif vehicle_property.name == "steering":
-            # sp = SteeringParameters()
-            # for subfield in fields(SteeringParameters):
-            #     setattr(
-            #         sp, subfield.name, getattr(omegaconf_dict.steering, subfield.name)
-            #     )
-            # setattr(vp, "steering", sp)
-            sp = Dict.empty(key_type=types.unicode_type, value_type=types.float64)
             for subfield in fields(SteeringParameters):
-                sp[subfield.name] = getattr(omegaconf_dict.steering, subfield.name)
-            setattr(vp, "steering", sp)
+                item_value = getattr(omegaconf_dict.steering, subfield.name)
+                if item_value is not None:
+                    vp[vehicle_property.name + "." + subfield.name] = getattr(
+                        omegaconf_dict.steering, subfield.name
+                    )
         elif vehicle_property.name == "longitudinal":
-            lp = LongitudinalParameters()
             for subfield in fields(LongitudinalParameters):
-                setattr(
-                    lp,
-                    subfield.name,
-                    getattr(omegaconf_dict.longitudinal, subfield.name),
-                )
-            setattr(vp, "longitudinal", lp)
+                item_value = getattr(omegaconf_dict.longitudinal, subfield.name)
+                if item_value is not None:
+                    vp[vehicle_property.name + "." + subfield.name] = getattr(
+                        omegaconf_dict.longitudinal, subfield.name
+                    )
         elif vehicle_property.name == "tire":
-            # tp = TireParameters()
-            # for subfield in fields(TireParameters):
-            #     setattr(tp, subfield.name, getattr(omegaconf_dict.tire, subfield.name))
-            # setattr(vp, "tire", tp)
-            tp = Dict.empty(key_type=types.unicode_type, value_type=types.float64)
             for subfield in fields(TireParameters):
-                tp[subfield.name] = getattr(omegaconf_dict.tire, subfield.name)
-            setattr(vp, "tire", tp)
+                item_value = getattr(omegaconf_dict.tire, subfield.name)
+                if item_value is not None:
+                    vp[vehicle_property.name + "." + subfield.name] = getattr(
+                        omegaconf_dict.tire, subfield.name
+                    )
         elif vehicle_property.name == "trailer":
-            tp = TrailerParameters()
             for subfield in fields(TrailerParameters):
-                setattr(
-                    tp, subfield.name, getattr(omegaconf_dict.trailer, subfield.name)
-                )
-            setattr(vp, "trailer", tp)
+                item_value = getattr(omegaconf_dict.trailer, subfield.name)
+                if item_value is not None:
+                    vp[vehicle_property.name + "." + subfield.name] = getattr(
+                        omegaconf_dict.trailer, subfield.name
+                    )
     return vp
 
 

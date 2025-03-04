@@ -1,4 +1,5 @@
 import numpy as jnp
+from numba import njit
 
 from .steering_constraints import steering_constraints
 from .acceleration_constraints import acceleration_constraints
@@ -12,6 +13,7 @@ Author: Nandan Tumu
 """
 
 
+@njit(cache=True)
 def vehicle_dynamics_mb(x, uInit, p):
     """
     vehicleDynamics_mb - multi-body vehicle dynamics based on the DOT (department of transportation) vehicle dynamics
@@ -79,46 +81,70 @@ def vehicle_dynamics_mb(x, uInit, p):
     # u2 = acceleration
 
     # consider steering constraints
-    u = []
-    u.append(
-        steering_constraints(x[2], uInit[0], p.steering)
-    )  # different name u_init/u due to side effects of u
-    # consider acceleration constraints
-    u.append(
-        acceleration_constraints(x[3], uInit[1], p.longitudinal)
-    )  # different name u_init/u due to side effects of u
+    u = [0.0, 0.0]
+    if (x[2] <= p["steering.min"] and uInit[0] <= 0) or (
+        x[2] >= p["steering.max"] and uInit[0] >= 0
+    ):
+        u[0] = 0
+    elif uInit[0] <= p["steering.v_min"]:
+        u[0] = p["steering.v_min"]
+    elif uInit[0] >= p["steering.v_max"]:
+        u[0] = p["steering.v_max"]
+
+    if x[3] > p["longitudinal.v_switch"]:
+        posLimit = p["longitudinal.a_max"] * p["longitudinal.v_switch"] / x[3]
+    else:
+        posLimit = p["longitudinal.a_max"]
+
+    # acceleration limit reached?
+    if (x[3] <= p["longitudinal.v_min"] and uInit[1] <= 0) or (
+        x[3] >= p["longitudinal.v_max"] and uInit[1] >= 0
+    ):
+        u[1] = 0
+    elif uInit[1] <= -p["longitudinal.a_max"]:
+        u[1] = -p["longitudinal.a_max"]
+    elif uInit[1] >= posLimit:
+        u[1] = posLimit
+
+    # u.append(
+    #     steering_constraints(x[2], uInit[0], p)
+    # )  # different name u_init/u due to side effects of u
+    # # consider acceleration constraints
+    # u.append(
+    #     acceleration_constraints(x[3], uInit[1], p)
+    # )  # different name u_init/u due to side effects of u
 
     # compute slip angle at cg
     # switch to kinematic model for small velocities
     if abs(x[3]) < 0.1:
         beta = 0.0
     else:
-        beta = jnp.atan(x[10] / x[3])
+        beta = jnp.arctan(x[10] / x[3])
     vel = jnp.sqrt(x[3] ** 2 + x[10] ** 2)
 
     # vertical tire forces
     F_z_LF = (
-        x[16] + p.R_w * (jnp.cos(x[13]) - 1) - 0.5 * p.T_f * jnp.sin(x[13])
-    ) * p.K_zt
+        x[16] + p["R_w"] * (jnp.cos(x[13]) - 1) - 0.5 * p["T_f"] * jnp.sin(x[13])
+    ) * p["K_zt"]
     F_z_RF = (
-        x[16] + p.R_w * (jnp.cos(x[13]) - 1) + 0.5 * p.T_f * jnp.sin(x[13])
-    ) * p.K_zt
+        x[16] + p["R_w"] * (jnp.cos(x[13]) - 1) + 0.5 * p["T_f"] * jnp.sin(x[13])
+    ) * p["K_zt"]
     F_z_LR = (
-        x[21] + p.R_w * (jnp.cos(x[18]) - 1) - 0.5 * p.T_r * jnp.sin(x[18])
-    ) * p.K_zt
+        x[21] + p["R_w"] * (jnp.cos(x[18]) - 1) - 0.5 * p["T_r"] * jnp.sin(x[18])
+    ) * p["K_zt"]
     F_z_RR = (
-        x[21] + p.R_w * (jnp.cos(x[18]) - 1) + 0.5 * p.T_r * jnp.sin(x[18])
-    ) * p.K_zt
+        x[21] + p["R_w"] * (jnp.cos(x[18]) - 1) + 0.5 * p["T_r"] * jnp.sin(x[18])
+    ) * p["K_zt"]
 
     # obtain individual tire speeds
-    u_w_lf = (x[3] + 0.5 * p.T_f * x[5]) * jnp.cos(x[2]) + (
-        x[10] + p.a * x[5]
+    u_w_lf = (x[3] + 0.5 * p["T_f"] * x[5]) * jnp.cos(x[2]) + (
+        x[10] + p["a"] * x[5]
     ) * jnp.sin(x[2])
-    u_w_rf = (x[3] - 0.5 * p.T_f * x[5]) * jnp.cos(x[2]) + (
-        x[10] + p.a * x[5]
+    u_w_rf = (x[3] - 0.5 * p["T_f"] * x[5]) * jnp.cos(x[2]) + (
+        x[10] + p["a"] * x[5]
     ) * jnp.sin(x[2])
-    u_w_lr = x[3] + 0.5 * p.T_r * x[5]
-    u_w_rr = x[3] - 0.5 * p.T_r * x[5]
+    u_w_lr = x[3] + 0.5 * p["T_r"] * x[5]
+    u_w_rr = x[3] - 0.5 * p["T_r"] * x[5]
 
     # negative wheel spin forbidden
     if u_w_lf < 0.0:
@@ -140,10 +166,10 @@ def vehicle_dynamics_mb(x, uInit, p):
         s_lr = 0.0
         s_rr = 0.0
     else:
-        s_lf = 1 - p.R_w * x[23] / u_w_lf
-        s_rf = 1 - p.R_w * x[24] / u_w_rf
-        s_lr = 1 - p.R_w * x[25] / u_w_lr
-        s_rr = 1 - p.R_w * x[26] / u_w_rr
+        s_lf = 1 - p["R_w"] * x[23] / u_w_lf
+        s_rf = 1 - p["R_w"] * x[24] / u_w_rf
+        s_lr = 1 - p["R_w"] * x[25] / u_w_lr
+        s_rr = 1 - p["R_w"] * x[26] / u_w_rr
 
     # lateral slip angles
     # switch to kinematic model for small velocities
@@ -154,110 +180,112 @@ def vehicle_dynamics_mb(x, uInit, p):
         alpha_RR = 0.0
     else:
         alpha_LF = (
-            jnp.atan(
-                (x[10] + p.a * x[5] - x[14] * (p.R_w - x[16]))
-                / (x[3] + 0.5 * p.T_f * x[5])
+            jnp.arctan(
+                (x[10] + p["a"] * x[5] - x[14] * (p["R_w"] - x[16]))
+                / (x[3] + 0.5 * p["T_f"] * x[5])
             )
             - x[2]
         )
         alpha_RF = (
-            jnp.atan(
-                (x[10] + p.a * x[5] - x[14] * (p.R_w - x[16]))
-                / (x[3] - 0.5 * p.T_f * x[5])
+            jnp.arctan(
+                (x[10] + p["a"] * x[5] - x[14] * (p["R_w"] - x[16]))
+                / (x[3] - 0.5 * p["T_f"] * x[5])
             )
             - x[2]
         )
-        alpha_LR = jnp.atan(
-            (x[10] - p.b * x[5] - x[19] * (p.R_w - x[21])) / (x[3] + 0.5 * p.T_r * x[5])
+        alpha_LR = jnp.arctan(
+            (x[10] - p["b"] * x[5] - x[19] * (p["R_w"] - x[21]))
+            / (x[3] + 0.5 * p["T_r"] * x[5])
         )
-        alpha_RR = jnp.atan(
-            (x[10] - p.b * x[5] - x[19] * (p.R_w - x[21])) / (x[3] - 0.5 * p.T_r * x[5])
+        alpha_RR = jnp.arctan(
+            (x[10] - p["b"] * x[5] - x[19] * (p["R_w"] - x[21]))
+            / (x[3] - 0.5 * p["T_r"] * x[5])
         )
 
     # auxiliary suspension movement
     z_SLF = (
-        (p.h_s - p.R_w + x[16] - x[11]) / jnp.cos(x[6])
-        - p.h_s
-        + p.R_w
-        + p.a * x[8]
-        + 0.5 * (x[6] - x[13]) * p.T_f
+        (p["h_s"] - p["R_w"] + x[16] - x[11]) / jnp.cos(x[6])
+        - p["h_s"]
+        + p["R_w"]
+        + p["a"] * x[8]
+        + 0.5 * (x[6] - x[13]) * p["T_f"]
     )
     z_SRF = (
-        (p.h_s - p.R_w + x[16] - x[11]) / jnp.cos(x[6])
-        - p.h_s
-        + p.R_w
-        + p.a * x[8]
-        - 0.5 * (x[6] - x[13]) * p.T_f
+        (p["h_s"] - p["R_w"] + x[16] - x[11]) / jnp.cos(x[6])
+        - p["h_s"]
+        + p["R_w"]
+        + p["a"] * x[8]
+        - 0.5 * (x[6] - x[13]) * p["T_f"]
     )
     z_SLR = (
-        (p.h_s - p.R_w + x[21] - x[11]) / jnp.cos(x[6])
-        - p.h_s
-        + p.R_w
-        - p.b * x[8]
-        + 0.5 * (x[6] - x[18]) * p.T_r
+        (p["h_s"] - p["R_w"] + x[21] - x[11]) / jnp.cos(x[6])
+        - p["h_s"]
+        + p["R_w"]
+        - p["b"] * x[8]
+        + 0.5 * (x[6] - x[18]) * p["T_r"]
     )
     z_SRR = (
-        (p.h_s - p.R_w + x[21] - x[11]) / jnp.cos(x[6])
-        - p.h_s
-        + p.R_w
-        - p.b * x[8]
-        - 0.5 * (x[6] - x[18]) * p.T_r
+        (p["h_s"] - p["R_w"] + x[21] - x[11]) / jnp.cos(x[6])
+        - p["h_s"]
+        + p["R_w"]
+        - p["b"] * x[8]
+        - 0.5 * (x[6] - x[18]) * p["T_r"]
     )
 
-    dz_SLF = x[17] - x[12] + p.a * x[9] + 0.5 * (x[7] - x[14]) * p.T_f
-    dz_SRF = x[17] - x[12] + p.a * x[9] - 0.5 * (x[7] - x[14]) * p.T_f
-    dz_SLR = x[22] - x[12] - p.b * x[9] + 0.5 * (x[7] - x[19]) * p.T_r
-    dz_SRR = x[22] - x[12] - p.b * x[9] - 0.5 * (x[7] - x[19]) * p.T_r
+    dz_SLF = x[17] - x[12] + p["a"] * x[9] + 0.5 * (x[7] - x[14]) * p["T_f"]
+    dz_SRF = x[17] - x[12] + p["a"] * x[9] - 0.5 * (x[7] - x[14]) * p["T_f"]
+    dz_SLR = x[22] - x[12] - p["b"] * x[9] + 0.5 * (x[7] - x[19]) * p["T_r"]
+    dz_SRR = x[22] - x[12] - p["b"] * x[9] - 0.5 * (x[7] - x[19]) * p["T_r"]
 
     # camber angles
-    gamma_LF = x[6] + p.D_f * z_SLF + p.E_f * (z_SLF) ** 2
-    gamma_RF = x[6] - p.D_f * z_SRF - p.E_f * (z_SRF) ** 2
-    gamma_LR = x[6] + p.D_r * z_SLR + p.E_r * (z_SLR) ** 2
-    gamma_RR = x[6] - p.D_r * z_SRR - p.E_r * (z_SRR) ** 2
+    gamma_LF = x[6] + p["D_f"] * z_SLF + p["E_f"] * (z_SLF) ** 2
+    gamma_RF = x[6] - p["D_f"] * z_SRF - p["E_f"] * (z_SRF) ** 2
+    gamma_LR = x[6] + p["D_r"] * z_SLR + p["E_r"] * (z_SLR) ** 2
+    gamma_RR = x[6] - p["D_r"] * z_SRR - p["E_r"] * (z_SRR) ** 2
 
     # compute longitudinal tire forces using the magic formula for pure slip
-    F0_x_LF = tireModel.formula_longitudinal(s_lf, gamma_LF, F_z_LF, p.tire)
-    F0_x_RF = tireModel.formula_longitudinal(s_rf, gamma_RF, F_z_RF, p.tire)
-    F0_x_LR = tireModel.formula_longitudinal(s_lr, gamma_LR, F_z_LR, p.tire)
-    F0_x_RR = tireModel.formula_longitudinal(s_rr, gamma_RR, F_z_RR, p.tire)
+    F0_x_LF = tireModel.formula_longitudinal(s_lf, gamma_LF, F_z_LF, p)
+    F0_x_RF = tireModel.formula_longitudinal(s_rf, gamma_RF, F_z_RF, p)
+    F0_x_LR = tireModel.formula_longitudinal(s_lr, gamma_LR, F_z_LR, p)
+    F0_x_RR = tireModel.formula_longitudinal(s_rr, gamma_RR, F_z_RR, p)
 
     # compute lateral tire forces using the magic formula for pure slip
-    res = tireModel.formula_lateral(alpha_LF, gamma_LF, F_z_LF, p.tire)
+    res = tireModel.formula_lateral(alpha_LF, gamma_LF, F_z_LF, p)
     F0_y_LF = res[0]
     mu_y_LF = res[1]
-    res = tireModel.formula_lateral(alpha_RF, gamma_RF, F_z_RF, p.tire)
+    res = tireModel.formula_lateral(alpha_RF, gamma_RF, F_z_RF, p)
     F0_y_RF = res[0]
     mu_y_RF = res[1]
-    res = tireModel.formula_lateral(alpha_LR, gamma_LR, F_z_LR, p.tire)
+    res = tireModel.formula_lateral(alpha_LR, gamma_LR, F_z_LR, p)
     F0_y_LR = res[0]
     mu_y_LR = res[1]
-    res = tireModel.formula_lateral(alpha_RR, gamma_RR, F_z_RR, p.tire)
+    res = tireModel.formula_lateral(alpha_RR, gamma_RR, F_z_RR, p)
     F0_y_RR = res[0]
     mu_y_RR = res[1]
 
     # compute longitudinal tire forces using the magic formula for combined slip
-    F_x_LF = tireModel.formula_longitudinal_comb(s_lf, alpha_LF, F0_x_LF, p.tire)
-    F_x_RF = tireModel.formula_longitudinal_comb(s_rf, alpha_RF, F0_x_RF, p.tire)
-    F_x_LR = tireModel.formula_longitudinal_comb(s_lr, alpha_LR, F0_x_LR, p.tire)
-    F_x_RR = tireModel.formula_longitudinal_comb(s_rr, alpha_RR, F0_x_RR, p.tire)
+    F_x_LF = tireModel.formula_longitudinal_comb(s_lf, alpha_LF, F0_x_LF, p)
+    F_x_RF = tireModel.formula_longitudinal_comb(s_rf, alpha_RF, F0_x_RF, p)
+    F_x_LR = tireModel.formula_longitudinal_comb(s_lr, alpha_LR, F0_x_LR, p)
+    F_x_RR = tireModel.formula_longitudinal_comb(s_rr, alpha_RR, F0_x_RR, p)
 
     # compute lateral tire forces using the magic formula for combined slip
     F_y_LF = tireModel.formula_lateral_comb(
-        s_lf, alpha_LF, gamma_LF, mu_y_LF, F_z_LF, F0_y_LF, p.tire
+        s_lf, alpha_LF, gamma_LF, mu_y_LF, F_z_LF, F0_y_LF, p
     )
     F_y_RF = tireModel.formula_lateral_comb(
-        s_rf, alpha_RF, gamma_RF, mu_y_RF, F_z_RF, F0_y_RF, p.tire
+        s_rf, alpha_RF, gamma_RF, mu_y_RF, F_z_RF, F0_y_RF, p
     )
     F_y_LR = tireModel.formula_lateral_comb(
-        s_lr, alpha_LR, gamma_LR, mu_y_LR, F_z_LR, F0_y_LR, p.tire
+        s_lr, alpha_LR, gamma_LR, mu_y_LR, F_z_LR, F0_y_LR, p
     )
     F_y_RR = tireModel.formula_lateral_comb(
-        s_rr, alpha_RR, gamma_RR, mu_y_RR, F_z_RR, F0_y_RR, p.tire
+        s_rr, alpha_RR, gamma_RR, mu_y_RR, F_z_RR, F0_y_RR, p
     )
 
     # auxiliary movements for compliant joint equations
-    delta_z_f = p.h_s - p.R_w + x[16] - x[11]
-    delta_z_r = p.h_s - p.R_w + x[21] - x[11]
+    delta_z_f = p["h_s"] - p["R_w"] + x[16] - x[11]
+    delta_z_r = p["h_s"] - p["R_w"] + x[21] - x[11]
 
     delta_phi_f = x[6] - x[13]
     delta_phi_r = x[6] - x[18]
@@ -268,64 +296,64 @@ def vehicle_dynamics_mb(x, uInit, p):
     dot_delta_z_f = x[17] - x[12]
     dot_delta_z_r = x[22] - x[12]
 
-    dot_delta_y_f = x[10] + p.a * x[5] - x[15]
-    dot_delta_y_r = x[10] - p.b * x[5] - x[20]
+    dot_delta_y_f = x[10] + p["a"] * x[5] - x[15]
+    dot_delta_y_r = x[10] - p["b"] * x[5] - x[20]
 
     delta_f = (
         delta_z_f * jnp.sin(x[6])
         - x[27] * jnp.cos(x[6])
-        - (p.h_raf - p.R_w) * jnp.sin(delta_phi_f)
+        - (p["h_raf"] - p["R_w"]) * jnp.sin(delta_phi_f)
     )
     delta_r = (
         delta_z_r * jnp.sin(x[6])
         - x[28] * jnp.cos(x[6])
-        - (p.h_rar - p.R_w) * jnp.sin(delta_phi_r)
+        - (p["h_rar"] - p["R_w"]) * jnp.sin(delta_phi_r)
     )
 
     dot_delta_f = (
         (delta_z_f * jnp.cos(x[6]) + x[27] * jnp.sin(x[6])) * x[7]
         + dot_delta_z_f * jnp.sin(x[6])
         - dot_delta_y_f * jnp.cos(x[6])
-        - (p.h_raf - p.R_w) * jnp.cos(delta_phi_f) * dot_delta_phi_f
+        - (p["h_raf"] - p["R_w"]) * jnp.cos(delta_phi_f) * dot_delta_phi_f
     )
     dot_delta_r = (
         (delta_z_r * jnp.cos(x[6]) + x[28] * jnp.sin(x[6])) * x[7]
         + dot_delta_z_r * jnp.sin(x[6])
         - dot_delta_y_r * jnp.cos(x[6])
-        - (p.h_rar - p.R_w) * jnp.cos(delta_phi_r) * dot_delta_phi_r
+        - (p["h_rar"] - p["R_w"]) * jnp.cos(delta_phi_r) * dot_delta_phi_r
     )
 
     # compliant joint forces
-    F_RAF = delta_f * p.K_ras + dot_delta_f * p.K_rad
-    F_RAR = delta_r * p.K_ras + dot_delta_r * p.K_rad
+    F_RAF = delta_f * p["K_ras"] + dot_delta_f * p["K_rad"]
+    F_RAR = delta_r * p["K_ras"] + dot_delta_r * p["K_rad"]
 
     # auxiliary suspension forces (bump stop neglected  squat/lift forces neglected)
     F_SLF = (
-        p.m_s * g * p.b / (2 * (p.a + p.b))
-        - z_SLF * p.K_sf
-        - dz_SLF * p.K_sdf
-        + (x[6] - x[13]) * p.K_tsf / p.T_f
+        p["m_s"] * g * p["b"] / (2 * (p["a"] + p["b"]))
+        - z_SLF * p["K_sf"]
+        - dz_SLF * p["K_sdf"]
+        + (x[6] - x[13]) * p["K_tsf"] / p["T_f"]
     )
 
     F_SRF = (
-        p.m_s * g * p.b / (2 * (p.a + p.b))
-        - z_SRF * p.K_sf
-        - dz_SRF * p.K_sdf
-        - (x[6] - x[13]) * p.K_tsf / p.T_f
+        p["m_s"] * g * p["b"] / (2 * (p["a"] + p["b"]))
+        - z_SRF * p["K_sf"]
+        - dz_SRF * p["K_sdf"]
+        - (x[6] - x[13]) * p["K_tsf"] / p["T_f"]
     )
 
     F_SLR = (
-        p.m_s * g * p.a / (2 * (p.a + p.b))
-        - z_SLR * p.K_sr
-        - dz_SLR * p.K_sdr
-        + (x[6] - x[18]) * p.K_tsr / p.T_r
+        p["m_s"] * g * p["a"] / (2 * (p["a"] + p["b"]))
+        - z_SLR * p["K_sr"]
+        - dz_SLR * p["K_sdr"]
+        + (x[6] - x[18]) * p["K_tsr"] / p["T_r"]
     )
 
     F_SRR = (
-        p.m_s * g * p.a / (2 * (p.a + p.b))
-        - z_SRR * p.K_sr
-        - dz_SRR * p.K_sdr
-        - (x[6] - x[18]) * p.K_tsr / p.T_r
+        p["m_s"] * g * p["a"] / (2 * (p["a"] + p["b"]))
+        - z_SRR * p["K_sr"]
+        - dz_SRR * p["K_sdr"]
+        - (x[6] - x[18]) * p["K_tsr"] / p["T_r"]
     )
 
     # auxiliary variables sprung mass
@@ -337,12 +365,12 @@ def vehicle_dynamics_mb(x, uInit, p):
     )
 
     sumN = (
-        (F_y_LF + F_y_RF) * p.a * jnp.cos(x[2])
-        + (F_x_LF + F_x_RF) * p.a * jnp.sin(x[2])
-        + (F_y_RF - F_y_LF) * 0.5 * p.T_f * jnp.sin(x[2])
-        + (F_x_LF - F_x_RF) * 0.5 * p.T_f * jnp.cos(x[2])
-        + (F_x_LR - F_x_RR) * 0.5 * p.T_r
-        - (F_y_LR + F_y_RR) * p.b
+        (F_y_LF + F_y_RF) * p["a"] * jnp.cos(x[2])
+        + (F_x_LF + F_x_RF) * p["a"] * jnp.sin(x[2])
+        + (F_y_RF - F_y_LF) * 0.5 * p["T_f"] * jnp.sin(x[2])
+        + (F_x_LF - F_x_RF) * 0.5 * p["T_f"] * jnp.cos(x[2])
+        + (F_x_LR - F_x_RR) * 0.5 * p["T_r"]
+        - (F_y_LR + F_y_RR) * p["b"]
     )
 
     sumY_s = (F_RAF + F_RAR) * jnp.cos(x[6]) + (
@@ -350,16 +378,28 @@ def vehicle_dynamics_mb(x, uInit, p):
     ) * jnp.sin(x[6])
 
     sumL = (
-        0.5 * F_SLF * p.T_f
-        + 0.5 * F_SLR * p.T_r
-        - 0.5 * F_SRF * p.T_f
-        - 0.5 * F_SRR * p.T_r
+        0.5 * F_SLF * p["T_f"]
+        + 0.5 * F_SLR * p["T_r"]
+        - 0.5 * F_SRF * p["T_f"]
+        - 0.5 * F_SRR * p["T_r"]
         - F_RAF
         / jnp.cos(x[6])
-        * (p.h_s - x[11] - p.R_w + x[16] - (p.h_raf - p.R_w) * jnp.cos(x[13]))
+        * (
+            p["h_s"]
+            - x[11]
+            - p["R_w"]
+            + x[16]
+            - (p["h_raf"] - p["R_w"]) * jnp.cos(x[13])
+        )
         - F_RAR
         / jnp.cos(x[6])
-        * (p.h_s - x[11] - p.R_w + x[21] - (p.h_rar - p.R_w) * jnp.cos(x[18]))
+        * (
+            p["h_s"]
+            - x[11]
+            - p["R_w"]
+            + x[21]
+            - (p["h_rar"] - p["R_w"]) * jnp.cos(x[18])
+        )
     )
 
     sumZ_s = (F_SLF + F_SLR + F_SRF + F_SRR) * jnp.cos(x[6]) - (
@@ -367,39 +407,55 @@ def vehicle_dynamics_mb(x, uInit, p):
     ) * jnp.sin(x[6])
 
     sumM_s = (
-        p.a * (F_SLF + F_SRF)
-        - p.b * (F_SLR + F_SRR)
+        p["a"] * (F_SLF + F_SRF)
+        - p["b"] * (F_SLR + F_SRR)
         + (
             (F_x_LF + F_x_RF) * jnp.cos(x[2])
             - (F_y_LF + F_y_RF) * jnp.sin(x[2])
             + F_x_LR
             + F_x_RR
         )
-        * (p.h_s - x[11])
+        * (p["h_s"] - x[11])
     )
 
     # auxiliary variables unsprung mass
     sumL_uf = (
-        0.5 * F_SRF * p.T_f
-        - 0.5 * F_SLF * p.T_f
-        - F_RAF * (p.h_raf - p.R_w)
+        0.5 * F_SRF * p["T_f"]
+        - 0.5 * F_SLF * p["T_f"]
+        - F_RAF * (p["h_raf"] - p["R_w"])
         + F_z_LF
-        * (p.R_w * jnp.sin(x[13]) + 0.5 * p.T_f * jnp.cos(x[13]) - p.K_lt * F_y_LF)
+        * (
+            p["R_w"] * jnp.sin(x[13])
+            + 0.5 * p["T_f"] * jnp.cos(x[13])
+            - p["K_lt"] * F_y_LF
+        )
         - F_z_RF
-        * (-p.R_w * jnp.sin(x[13]) + 0.5 * p.T_f * jnp.cos(x[13]) + p.K_lt * F_y_RF)
+        * (
+            -p["R_w"] * jnp.sin(x[13])
+            + 0.5 * p["T_f"] * jnp.cos(x[13])
+            + p["K_lt"] * F_y_RF
+        )
         - ((F_y_LF + F_y_RF) * jnp.cos(x[2]) + (F_x_LF + F_x_RF) * jnp.sin(x[2]))
-        * (p.R_w - x[16])
+        * (p["R_w"] - x[16])
     )
 
     sumL_ur = (
-        0.5 * F_SRR * p.T_r
-        - 0.5 * F_SLR * p.T_r
-        - F_RAR * (p.h_rar - p.R_w)
+        0.5 * F_SRR * p["T_r"]
+        - 0.5 * F_SLR * p["T_r"]
+        - F_RAR * (p["h_rar"] - p["R_w"])
         + F_z_LR
-        * (p.R_w * jnp.sin(x[18]) + 0.5 * p.T_r * jnp.cos(x[18]) - p.K_lt * F_y_LR)
+        * (
+            p["R_w"] * jnp.sin(x[18])
+            + 0.5 * p["T_r"] * jnp.cos(x[18])
+            - p["K_lt"] * F_y_LR
+        )
         - F_z_RR
-        * (-p.R_w * jnp.sin(x[18]) + 0.5 * p.T_r * jnp.cos(x[18]) + p.K_lt * F_y_RR)
-        - (F_y_LR + F_y_RR) * (p.R_w - x[21])
+        * (
+            -p["R_w"] * jnp.sin(x[18])
+            + 0.5 * p["T_r"] * jnp.cos(x[18])
+            + p["K_lt"] * F_y_RR
+        )
+        - (F_y_LR + F_y_RR) * (p["R_w"] - x[21])
     )
 
     sumZ_uf = F_z_LF + F_z_RF + F_RAF * jnp.sin(x[6]) - (F_SLF + F_SRF) * jnp.cos(x[6])
@@ -432,15 +488,15 @@ def vehicle_dynamics_mb(x, uInit, p):
 
         # Use kinematic model with reference point at center of mass
         # wheelbase
-        lwb = p.a + p.b
+        lwb = p["a"] + p["b"]
         # system dynamics
         x_ks = [x[0], x[1], x[2], x[3], x[4]]
         # kinematic model
         f_ks = vehicle_dynamics_ks_cog(x_ks, u, p)
         f = [f_ks[0], f_ks[1], f_ks[2], f_ks[3], f_ks[4]]
         # derivative of slip angle and yaw rate
-        d_beta = (p.b * u[0]) / (
-            lwb * jnp.cos(x[2]) ** 2 * (1 + (jnp.tan(x[2]) ** 2 * p.b / lwb) ** 2)
+        d_beta = (p["b"] * u[0]) / (
+            lwb * jnp.cos(x[2]) ** 2 * (1 + (jnp.tan(x[2]) ** 2 * p["b"] / lwb) ** 2)
         )
         dd_psi = (
             1
@@ -457,59 +513,77 @@ def vehicle_dynamics_mb(x, uInit, p):
         f.append(jnp.cos(beta + x[4]) * vel)
         f.append(jnp.sin(beta + x[4]) * vel)
         f.append(u[0])
-        f.append(1 / p.m * sumX + x[5] * x[10])
+        f.append(1 / p["m"] * sumX + x[5] * x[10])
         f.append(x[5])
         f.append(
             1
-            / (p.I_z - (p.I_xz_s) ** 2 / p.I_Phi_s)
-            * (sumN + p.I_xz_s / p.I_Phi_s * sumL)
+            / (p["I_z"] - (p["I_xz_s"]) ** 2 / p["I_Phi_s"])
+            * (sumN + p["I_xz_s"] / p["I_Phi_s"] * sumL)
         )
 
     # remaining sprung mass dynamics
     f.append(x[7])
     f.append(
-        1 / (p.I_Phi_s - (p.I_xz_s) ** 2 / p.I_z) * (p.I_xz_s / p.I_z * sumN + sumL)
+        1
+        / (p["I_Phi_s"] - (p["I_xz_s"]) ** 2 / p["I_z"])
+        * (p["I_xz_s"] / p["I_z"] * sumN + sumL)
     )
     f.append(x[9])
-    f.append(1 / p.I_y_s * sumM_s)
-    f.append(1 / p.m_s * sumY_s - x[5] * x[3])
+    f.append(1 / p["I_y_s"] * sumM_s)
+    f.append(1 / p["m_s"] * sumY_s - x[5] * x[3])
     f.append(x[12])
-    f.append(g - 1 / p.m_s * sumZ_s)
+    f.append(g - 1 / p["m_s"] * sumZ_s)
 
     # unsprung mass dynamics (front)
     f.append(x[14])
-    f.append(1 / p.I_uf * sumL_uf)
-    f.append(1 / p.m_uf * sumY_uf - x[5] * x[3])
+    f.append(1 / p["I_uf"] * sumL_uf)
+    f.append(1 / p["m_uf"] * sumY_uf - x[5] * x[3])
     f.append(x[17])
-    f.append(g - 1 / p.m_uf * sumZ_uf)
+    f.append(g - 1 / p["m_uf"] * sumZ_uf)
 
     # unsprung mass dynamics (rear)
     f.append(x[19])
-    f.append(1 / p.I_ur * sumL_ur)
-    f.append(1 / p.m_ur * sumY_ur - x[5] * x[3])
+    f.append(1 / p["I_ur"] * sumL_ur)
+    f.append(1 / p["m_ur"] * sumY_ur - x[5] * x[3])
     f.append(x[22])
-    f.append(g - 1 / p.m_ur * sumZ_ur)
+    f.append(g - 1 / p["m_ur"] * sumZ_ur)
 
     # convert acceleration input to brake and engine torque
     if u[1] > 0:
         T_B = 0.0
-        T_E = p.m * p.R_w * u[1]
+        T_E = p["m"] * p["R_w"] * u[1]
     else:
-        T_B = p.m * p.R_w * u[1]
+        T_B = p["m"] * p["R_w"] * u[1]
         T_E = 0.0
 
     # wheel dynamics (p.T  new parameter for torque splitting)
-    f.append(1 / p.I_y_w * (-p.R_w * F_x_LF + 0.5 * p.T_sb * T_B + 0.5 * p.T_se * T_E))
-    f.append(1 / p.I_y_w * (-p.R_w * F_x_RF + 0.5 * p.T_sb * T_B + 0.5 * p.T_se * T_E))
     f.append(
         1
-        / p.I_y_w
-        * (-p.R_w * F_x_LR + 0.5 * (1 - p.T_sb) * T_B + 0.5 * (1 - p.T_se) * T_E)
+        / p["I_y_w"]
+        * (-p["R_w"] * F_x_LF + 0.5 * p["T_sb"] * T_B + 0.5 * p["T_se"] * T_E)
     )
     f.append(
         1
-        / p.I_y_w
-        * (-p.R_w * F_x_RR + 0.5 * (1 - p.T_sb) * T_B + 0.5 * (1 - p.T_se) * T_E)
+        / p["I_y_w"]
+        * (-p["R_w"] * F_x_RF + 0.5 * p["T_sb"] * T_B + 0.5 * p["T_se"] * T_E)
+    )
+    f.append(
+        1
+        / p["I_y_w"]
+        * (
+            -p["R_w"] * F_x_LR
+            + 0.5 * (1 - p["T_sb"]) * T_B
+            + 0.5 * (1 - p["T_se"]) * T_E
+        )
+    )
+    f.append(
+        1
+        / p["I_y_w"]
+        * (
+            -p["R_w"] * F_x_RR
+            + 0.5 * (1 - p["T_sb"]) * T_B
+            + 0.5 * (1 - p["T_se"]) * T_E
+        )
     )
 
     # negative wheel spin forbidden
