@@ -11,6 +11,7 @@ from nav_msgs.msg import Odometry
 from geometry_msgs.msg import PoseWithCovarianceStamped, TwistWithCovarianceStamped
 from ackermann_msgs.msg import AckermannDriveStamped
 from sensor_msgs.msg import Imu
+from std_msgs.msg import Float32
 import numpy as np
 
 from numba import njit
@@ -121,6 +122,7 @@ class MBSimulator(Node):
 
         control_cbg = MutuallyExclusiveCallbackGroup()
         dynamics_cbg = MutuallyExclusiveCallbackGroup()
+        friction_cbg = MutuallyExclusiveCallbackGroup()
 
         self.timer = self.create_timer(
             1.0 / self.freq, self.timer_callback, callback_group=dynamics_cbg
@@ -137,7 +139,17 @@ class MBSimulator(Node):
             1,
             callback_group=control_cbg,
         )
+        self.friction_sub = self.create_subscription(
+            Float32,
+            "/friction",
+            self.friction_callback,
+            1,
+            callback_group=friction_cbg,
+        )
+
         self.control_lock = Lock()
+        self.parameter_lock = Lock()
+
         self.get_logger().info(
             "MB Vehicle Simulator running at 100Hz with odeint integration."
         )
@@ -146,10 +158,13 @@ class MBSimulator(Node):
         """This function updates the state of the vehicle and publishes the ground truth odometry and pose."""
         with self.control_lock:
             control_input = self.control_input.copy()
-        self.get_logger().info(f"Control input: {control_input}")
-        self.state = integrate_model(
-            self.state, control_input, self.parameters, 1 / self.freq
+        self.get_logger().info(
+            f"Friction: {self.parameters['tire.p_dy1']} | Control input: {control_input}"
         )
+        with self.parameter_lock:
+            self.state = integrate_model(
+                self.state, control_input, self.parameters, 1 / self.freq
+            )
         self.publish_pose_and_covariance(control_input)
 
     def steer_callback(self, msg):
@@ -168,6 +183,11 @@ class MBSimulator(Node):
         self.control_input = np.array([steerv, accl])
         self.control_lock.release()
         # self.get_logger().info(f"Steering: {steerv}, Acceleration: {accl}")
+
+    def friction_callback(self, msg):
+        with self.parameter_lock:
+            self.parameters["tire.p_dy1"] = msg.data
+        self.get_logger().info(f"Friction coefficient updated to {msg.data}")
 
     def publish_pose_and_covariance(self, control_input=None):
         if control_input is None:
