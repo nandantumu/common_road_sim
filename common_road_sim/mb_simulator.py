@@ -46,24 +46,34 @@ def pid_steer(steer, current_steer, max_sv):
 
 
 @njit(cache=True)
-def pid_accl(speed, current_speed, max_a, max_v, min_v):
+def pid_accl(speed, current_speed, max_a, max_v, min_v, integral_error, dt):
+    """
+    Proportional-Integral controller for acceleration.
+    dt: time step duration.
+    """
     vel_diff = speed - current_speed
-    FS_MOD = 1.5  # Modifier for Full Scale vehicles.
+    FS_MOD = 3.0  # Modifier for Full Scale vehicles.
+
     if current_speed > 0.0:
         if vel_diff > 0:
             kp = FS_MOD * 10.0 * max_a / max_v
-            return kp * vel_diff
+            ki = 0.1 * kp  # Integral gain
         else:
             kp = FS_MOD * 10.0 * max_a / (-min_v)
-            return kp * vel_diff
+            ki = 0.1 * kp
     else:
         if vel_diff > 0:
-            kp = FS_MOD * 2.0 * max_a / max_v
-            return kp * vel_diff
+            kp = FS_MOD * 10.0 * max_a / max_v
+            ki = 0.1 * kp
         else:
-            kp = FS_MOD * 2.0 * max_a / (-min_v)
-            return kp * vel_diff
+            kp = FS_MOD * 10.0 * max_a / (-min_v)
+            ki = 0.1 * kp
 
+    # Accumulate error using a static (function attribute) variable.
+    integral_error += vel_diff * dt
+
+    control_signal = kp * vel_diff + ki * integral_error
+    return integral_error, control_signal
 
 def integrate_model(state, control_input, parameters, dt):
     """
@@ -154,13 +164,16 @@ class MBSimulator(Node):
             "MB Vehicle Simulator running at 100Hz with odeint integration."
         )
 
+        self.speed_integral_error = 0.0
+        self.last_control_command_time = self.get_clock().now()
+
     def timer_callback(self):
         """This function updates the state of the vehicle and publishes the ground truth odometry and pose."""
         with self.control_lock:
             control_input = self.control_input.copy()
-        self.get_logger().info(
-            f"Friction: {self.parameters['tire.p_dy1']} | Control input: {control_input}"
-        )
+        # self.get_logger().info(
+        #     f"Friction: {self.parameters['tire.p_dy1']} | Control input: {control_input}"
+        # )
         with self.parameter_lock:
             self.state = integrate_model(
                 self.state, control_input, self.parameters, 1 / self.freq
@@ -171,13 +184,18 @@ class MBSimulator(Node):
         steerv = pid_steer(
             msg.drive.steering_angle, self.state[2], self.parameters["steering.v_max"]
         )
-        accl = pid_accl(
+        new_time = self.get_clock().now()
+        dt = (new_time - self.last_control_command_time).nanoseconds / 1e9
+        self.speed_integral_error, accl = pid_accl(
             msg.drive.speed,
             self.state[3],
             self.parameters["longitudinal.a_max"],
             self.parameters["longitudinal.v_max"],
             self.parameters["longitudinal.v_min"],
+            self.speed_integral_error,
+            dt,
         )
+        self.last_control_command_time = new_time
 
         self.control_lock.acquire()
         self.control_input = np.array([steerv, accl])
@@ -187,7 +205,7 @@ class MBSimulator(Node):
     def friction_callback(self, msg):
         with self.parameter_lock:
             self.parameters["tire.p_dy1"] = msg.data
-        self.get_logger().info(f"Friction coefficient updated to {msg.data}")
+        # self.get_logger().info(f"Friction coefficient updated to {msg.data}")
 
     def publish_pose_and_covariance(self, control_input=None):
         if control_input is None:
