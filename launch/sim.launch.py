@@ -20,4 +20,11 @@ def generate_launch_description():
         output="screen",
     )
 
-    return LaunchDescription([video, mb_simulator])
+    friction_switcher = Node(
+        package="common_road_sim",
+        executable="friction_switcher",
+        name="friction_switcher",
+        output="screen",
+    )
+
+    return LaunchDescription([video, mb_simulator, friction_switcher])

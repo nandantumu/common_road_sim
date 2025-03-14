@@ -1,4 +1,5 @@
 import math
+import random
 import rclpy
 from rclpy.node import Node
 from nav_msgs.msg import Odometry
@@ -58,6 +59,10 @@ class CircleController(Node):
         # Calculate steering angle using a simple proportional controller
         steering_angle = k_heading * heading_error + k_distance * distance_error
         steering_angle = max(min(steering_angle, 0.5), -0.5)  # Limit steering angle
+
+        # With probability 0.5, invert the steering angle
+        flip = 1 if random.choice([True, False]) else -1
+        steering_angle *= flip
 
         # Create and publish the drive message
         drive_msg = AckermannDriveStamped()

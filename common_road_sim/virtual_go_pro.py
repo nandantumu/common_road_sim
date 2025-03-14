@@ -82,16 +82,10 @@ class VirtualGoProNode(Node):
         """
         gopro_x, gopro_y = gopro_pos
         # Get the texture corresponding to the gopro's position
-        if gopro_x < self.center_coordinate[0]:
-            if gopro_y < self.center_coordinate[1]:
-                texture = self.texture_images[0]
-            else:
-                texture = self.texture_images[1]
-        else:
-            if gopro_y < self.center_coordinate[1]:
-                texture = self.texture_images[2]
-            else:
-                texture = self.texture_images[3]
+        # Calculate texture index directly using boolean logic
+        x_index = 2 if gopro_x >= self.center_coordinate[0] else 0
+        y_index = 1 if gopro_y >= self.center_coordinate[1] else 0
+        texture = self.texture_images[x_index + y_index]
 
         # Get the gopro's view
         # Rotate the texture to match the gopro's orientation
