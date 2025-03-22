@@ -75,6 +75,7 @@ def pid_accl(speed, current_speed, max_a, max_v, min_v, integral_error, dt):
     control_signal = kp * vel_diff + ki * integral_error
     return integral_error, control_signal
 
+
 def integrate_model(state, control_input, parameters, dt):
     """
     Integrate the vehicle dynamics using SciPy's odeint over the interval [0, dt].
@@ -128,7 +129,7 @@ class MBSimulator(Node):
         initial_state = np.array([0, 0, 0, 0, 0, 0, 0])
         self.state = init_mb(initial_state, self.parameters)
         # Initialize with a nonzero control input so the vehicle can move.
-        self.control_input = np.array([1.0, 1.0])
+        self.control_input = np.array([0.0, 0.0])
 
         control_cbg = MutuallyExclusiveCallbackGroup()
         dynamics_cbg = MutuallyExclusiveCallbackGroup()
