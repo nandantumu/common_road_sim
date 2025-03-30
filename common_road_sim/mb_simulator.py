@@ -23,6 +23,14 @@ from scipy.integrate import odeint
 from scipy.spatial.transform import Rotation as R
 from threading import Lock
 
+try:
+    from context_msgs.msg import STControl, STState, STCombined
+
+    GT_STATE_PUB = True
+except ImportError:
+    GT_STATE_PUB = False
+    print("context_msgs not found, GT_STATE_PUB will not be used.")
+
 """
 This module contains the class MBVehicleSimulator, which is a simulator for a multi-body vehicle model.
 It runs on a clock at 100Hz using SciPy's odeint integration.
@@ -98,7 +106,7 @@ def integrate_model(state, control_input, parameters, dt):
 
 
 class MBSimulator(Node):
-    def __init__(self):
+    def __init__(self, ground_truth_pub=True):
         super().__init__("mb_simulator")
         self.declare_parameters(
             namespace="mb_simulator",
@@ -157,6 +165,17 @@ class MBSimulator(Node):
             1,
             callback_group=friction_cbg,
         )
+        self.ground_truth_pub = ground_truth_pub
+        if ground_truth_pub:
+            self.gt_state_pub = self.create_publisher(
+                STState, "/ground_truth/state", 10
+            )
+            self.gt_control_pub = self.create_publisher(
+                STControl, "/ground_truth/control", 10
+            )
+            self.gt_combined_pub = self.create_publisher(
+                STCombined, "/ground_truth/combined", 10
+            )
 
         self.control_lock = Lock()
         self.parameter_lock = Lock()
@@ -180,6 +199,31 @@ class MBSimulator(Node):
                 self.state, control_input, self.parameters, 1 / self.freq
             )
         self.publish_pose_and_covariance(control_input)
+
+        if self.ground_truth_pub:
+            self.publish_gt_state(control_input)
+
+    def publish_gt_state(self, control_input):
+        stamp = self.get_clock().now().to_msg()
+        state_message = STState()
+        control_message = STControl()
+        combined_message = STCombined()
+        state_message.header.stamp = stamp
+        control_message.header.stamp = stamp
+        combined_message.header.stamp = stamp
+        state_message.x = self.state[0]
+        state_message.y = self.state[1]
+        state_message.v = self.state[3]
+        state_message.yaw = self.state[4]
+        state_message.yaw_rate = self.state[5]
+        state_message.slip_angle = np.arctan2(self.state[10], self.state[3])
+        control_message.steering_angle = control_input[0]
+        control_message.acceleration = control_input[1]
+        combined_message.state = state_message
+        combined_message.control = control_message
+        self.gt_state_pub.publish(state_message)
+        self.gt_control_pub.publish(control_message)
+        self.gt_combined_pub.publish(combined_message)
 
     def steer_callback(self, msg):
         steerv = pid_steer(
@@ -216,6 +260,7 @@ class MBSimulator(Node):
         pose_message.header.frame_id = "map"
         pose_message.pose.pose.position.x = self.state[0]
         pose_message.pose.pose.position.y = self.state[1]
+        pose_message.pose.pose.position.z = self.state[11]
         # Use state[11] for z, if available.
         pose_message.pose.pose.position.z = (
             self.state[11] if len(self.state) > 11 else 0.0
@@ -238,6 +283,9 @@ class MBSimulator(Node):
         slip_angle = np.arctan2(self.state[10], self.state[3])
         twist_message.twist.twist.linear.x = self.state[3] * np.cos(slip_angle)
         twist_message.twist.twist.linear.y = self.state[3] * np.sin(slip_angle)
+        twist_message.twist.twist.linear.z = self.state[12]
+        twist_message.twist.twist.angular.x = self.state[9]
+        twist_message.twist.twist.angular.y = self.state[7]
         twist_message.twist.twist.angular.z = self.state[5]
 
         odom_message = Odometry()
@@ -248,8 +296,8 @@ class MBSimulator(Node):
         imu_message = Imu()
         imu_message.header = pose_message.header
         imu_message.orientation = pose_message.pose.pose.orientation
-        imu_message.angular_velocity.x = self.state[7]
-        imu_message.angular_velocity.y = self.state[9]
+        imu_message.angular_velocity.x = self.state[9]
+        imu_message.angular_velocity.y = self.state[7]
         imu_message.angular_velocity.z = self.state[5]
         imu_message.linear_acceleration.x = control_input[1]
 
@@ -260,7 +308,7 @@ class MBSimulator(Node):
 
 def main(args=None):
     rclpy.init(args=args)
-    simulator = MBSimulator()
+    simulator = MBSimulator(ground_truth_pub=GT_STATE_PUB)
     rclpy.spin(simulator)
     rclpy.shutdown()
 
