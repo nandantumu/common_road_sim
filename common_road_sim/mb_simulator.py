@@ -213,7 +213,7 @@ class MBSimulator(Node):
         combined_message.header.stamp = stamp
         state_message.x = self.state[0]
         state_message.y = self.state[1]
-        state_message.v = self.state[3]
+        state_message.velocity = self.state[3]
         state_message.yaw = self.state[4]
         state_message.yaw_rate = self.state[5]
         state_message.slip_angle = np.arctan2(self.state[10], self.state[3])
@@ -241,6 +241,11 @@ class MBSimulator(Node):
             dt,
         )
         self.last_control_command_time = new_time
+
+        if np.isnan(steerv):
+            steerv = 0.0
+        if np.isnan(accl):
+            accl = 0.0
 
         self.control_lock.acquire()
         self.control_input = np.array([steerv, accl])

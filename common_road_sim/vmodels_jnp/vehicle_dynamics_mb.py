@@ -116,7 +116,7 @@ def vehicle_dynamics_mb(x, uInit, p):
 
     # compute slip angle at cg
     # switch to kinematic model for small velocities
-    if abs(x[3]) < 0.1:
+    if abs(x[3]) < p["longitudinal.v_switch"]:
         beta = 0.0
     else:
         beta = jnp.arctan(x[10] / x[3])
@@ -160,7 +160,7 @@ def vehicle_dynamics_mb(x, uInit, p):
         u_w_rr *= 0
     # compute longitudinal slip
     # switch to kinematic model for small velocities
-    if abs(x[3]) < 0.1:
+    if abs(x[3]) < p["longitudinal.v_switch"]:
         s_lf = 0.0
         s_rf = 0.0
         s_lr = 0.0
@@ -173,7 +173,7 @@ def vehicle_dynamics_mb(x, uInit, p):
 
     # lateral slip angles
     # switch to kinematic model for small velocities
-    if abs(x[3]) < 0.1:
+    if abs(x[3]) < p["longitudinal.v_switch"]:
         alpha_LF = 0.0
         alpha_RF = 0.0
         alpha_LR = 0.0
@@ -476,7 +476,7 @@ def vehicle_dynamics_mb(x, uInit, p):
     # dynamics common with single-track model
     f = []  # init 'right hand side'
     # switch to kinematic model for small velocities
-    if abs(x[3]) < 0.1:
+    if abs(x[3]) < p["longitudinal.v_switch"]:
         # wheelbase
         # lwb = p.a + p.b
 
