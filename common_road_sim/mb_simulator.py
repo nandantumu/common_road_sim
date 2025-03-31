@@ -105,6 +105,17 @@ def integrate_model(state, control_input, parameters, dt):
     return next_state
 
 
+def transform_yaw_to_plus_minus_pi(yaw):
+    """
+    Transform the yaw angle to be within the range [-pi, pi].
+    """
+    if yaw > np.pi:
+        yaw -= 2 * np.pi
+    elif yaw < -np.pi:
+        yaw += 2 * np.pi
+    return yaw
+
+
 class MBSimulator(Node):
     def __init__(self, ground_truth_pub=True):
         super().__init__("mb_simulator")
@@ -214,7 +225,7 @@ class MBSimulator(Node):
         state_message.x = self.state[0]
         state_message.y = self.state[1]
         state_message.velocity = self.state[3]
-        state_message.yaw = self.state[4]
+        state_message.yaw = transform_yaw_to_plus_minus_pi(self.state[4])
         state_message.yaw_rate = self.state[5]
         state_message.slip_angle = np.arctan2(self.state[10], self.state[3])
         control_message.steering_angle = self.state[2]
