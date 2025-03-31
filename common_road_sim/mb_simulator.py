@@ -43,14 +43,14 @@ The control inputs are:
 
 
 @njit(cache=True)
-def pid_steer(steer, current_steer, max_sv):
-    steer_diff = steer - current_steer
-    if np.fabs(steer_diff) > 1e-4:
-        return (steer_diff / np.fabs(steer_diff)) * max_sv
-    else:
-        sv = 0.0
-
-    return sv
+def pid_steer(steer, current_steer, max_sv, dt):
+    error = steer - current_steer
+    steer_rate = error / dt
+    if steer_rate > max_sv:
+        steer_rate = max_sv
+    elif steer_rate < -max_sv:
+        steer_rate = -max_sv
+    return steer_rate
 
 
 @njit(cache=True)
@@ -217,7 +217,7 @@ class MBSimulator(Node):
         state_message.yaw = self.state[4]
         state_message.yaw_rate = self.state[5]
         state_message.slip_angle = np.arctan2(self.state[10], self.state[3])
-        control_message.steering_angle = control_input[0]
+        control_message.steering_angle = self.state[2]
         control_message.acceleration = control_input[1]
         combined_message.state = state_message
         combined_message.control = control_message
@@ -226,11 +226,14 @@ class MBSimulator(Node):
         self.gt_combined_pub.publish(combined_message)
 
     def steer_callback(self, msg):
-        steerv = pid_steer(
-            msg.drive.steering_angle, self.state[2], self.parameters["steering.v_max"]
-        )
         new_time = self.get_clock().now()
-        dt = (new_time - self.last_control_command_time).nanoseconds / 1e9
+        dt = 1 / self.freq
+        steerv = pid_steer(
+            msg.drive.steering_angle,
+            self.state[2],
+            self.parameters["steering.v_max"],
+            dt,
+        )
         self.speed_integral_error, accl = pid_accl(
             msg.drive.speed,
             self.state[3],
