@@ -1,6 +1,6 @@
-texture_list: ["Grass.png", "Gravel.png", "Sand.png", "Soil.png"]
+texture_list: ["PatchyGrass.jpg", "Brick.jpg", "Sand.jpg", "Concrete.jpg"]
 friction_list: [0.3, 0.8, 0.45, 0.6]
-center_coordinate: [7.48, 7.83]
+center_coordinate: [106, -16]
 
 
 

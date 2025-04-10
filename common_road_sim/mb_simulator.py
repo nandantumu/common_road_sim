@@ -6,6 +6,7 @@ from .vmodels_jnp.parameters import (
 )
 from .vmodels_jnp.init_mb import init_mb
 from .vmodels_jnp.vehicle_dynamics_mb import vehicle_dynamics_mb
+from .vmodels_jnp.vehicle_dynamics_st import vehicle_dynamics_st
 
 from nav_msgs.msg import Odometry
 from geometry_msgs.msg import PoseWithCovarianceStamped, TwistWithCovarianceStamped
@@ -90,7 +91,7 @@ def integrate_model(state, control_input, parameters, dt):
     """
 
     def model_dynamics(x, t, u, p):
-        return vehicle_dynamics_mb(x, u, p)
+        return vehicle_dynamics_st(x, u, p)
 
     t_span = [0, dt]
     next_state = odeint(
@@ -105,15 +106,11 @@ def integrate_model(state, control_input, parameters, dt):
     return next_state
 
 
-def transform_yaw_to_plus_minus_pi(yaw):
+def transform_yaw(yaw):
     """
-    Transform the yaw angle to be within the range [-pi, pi].
+    Transform the yaw angle to be within the range [0, 2*pi].
     """
-    if yaw > np.pi:
-        yaw -= 2 * np.pi
-    elif yaw < -np.pi:
-        yaw += 2 * np.pi
-    return yaw
+    return yaw % (2 * np.pi)
 
 
 class MBSimulator(Node):
@@ -146,7 +143,8 @@ class MBSimulator(Node):
 
         # Initialize state vector; here we assume a 7-dimensional state.
         initial_state = np.array([0, 0, 0, 0, 0, 0, 0])
-        self.state = init_mb(initial_state, self.parameters)
+        # self.state = init_mb(initial_state, self.parameters)
+        self.state = initial_state  # For Single Track Model
         # Initialize with a nonzero control input so the vehicle can move.
         self.control_input = np.array([0.0, 0.0])
 
@@ -222,14 +220,25 @@ class MBSimulator(Node):
         state_message.header.stamp = stamp
         control_message.header.stamp = stamp
         combined_message.header.stamp = stamp
+
+        # MB MODEL
+        # state_message.x = self.state[0]
+        # state_message.y = self.state[1]
+        # state_message.velocity = self.state[3]
+        # state_message.yaw = transform_yaw(self.state[4])
+        # state_message.yaw_rate = self.state[5]
+        # state_message.slip_angle = np.arctan2(self.state[10], self.state[3])
+        # control_message.steering_angle = self.state[2]
+        # control_message.acceleration = control_input[1]
+
+        # SINGLE TRACK MODEL
         state_message.x = self.state[0]
         state_message.y = self.state[1]
         state_message.velocity = self.state[3]
-        state_message.yaw = transform_yaw_to_plus_minus_pi(self.state[4])
+        state_message.yaw = transform_yaw(self.state[4])
         state_message.yaw_rate = self.state[5]
-        state_message.slip_angle = np.arctan2(self.state[10], self.state[3])
-        control_message.steering_angle = self.state[2]
-        control_message.acceleration = control_input[1]
+        state_message.slip_angle = self.state[6]
+
         combined_message.state = state_message
         combined_message.control = control_message
         self.gt_state_pub.publish(state_message)
@@ -279,7 +288,6 @@ class MBSimulator(Node):
         pose_message.header.frame_id = "map"
         pose_message.pose.pose.position.x = self.state[0]
         pose_message.pose.pose.position.y = self.state[1]
-        pose_message.pose.pose.position.z = self.state[11]
         # Use state[11] for z, if available.
         pose_message.pose.pose.position.z = (
             self.state[11] if len(self.state) > 11 else 0.0
@@ -299,12 +307,13 @@ class MBSimulator(Node):
 
         twist_message = TwistWithCovarianceStamped()
         twist_message.header = pose_message.header
-        slip_angle = np.arctan2(self.state[10], self.state[3])
+        # slip_angle = np.arctan2(self.state[10], self.state[3])
+        slip_angle = self.state[6]
         twist_message.twist.twist.linear.x = self.state[3] * np.cos(slip_angle)
         twist_message.twist.twist.linear.y = self.state[3] * np.sin(slip_angle)
-        twist_message.twist.twist.linear.z = self.state[12]
-        twist_message.twist.twist.angular.x = self.state[9]
-        twist_message.twist.twist.angular.y = self.state[7]
+        # twist_message.twist.twist.linear.z = self.state[12]
+        # twist_message.twist.twist.angular.x = self.state[9]
+        # twist_message.twist.twist.angular.y = self.state[7]
         twist_message.twist.twist.angular.z = self.state[5]
 
         odom_message = Odometry()
@@ -315,8 +324,8 @@ class MBSimulator(Node):
         imu_message = Imu()
         imu_message.header = pose_message.header
         imu_message.orientation = pose_message.pose.pose.orientation
-        imu_message.angular_velocity.x = self.state[9]
-        imu_message.angular_velocity.y = self.state[7]
+        # imu_message.angular_velocity.x = self.state[9]
+        # imu_message.angular_velocity.y = self.state[7]
         imu_message.angular_velocity.z = self.state[5]
         imu_message.linear_acceleration.x = control_input[1]
 
