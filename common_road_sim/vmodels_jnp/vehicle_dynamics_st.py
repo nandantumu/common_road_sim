@@ -6,7 +6,7 @@ from .steering_constraints import steering_constraints
 from .acceleration_constraints import acceleration_constraints
 
 
-@njit(cache=True)
+@njit(cache=True, nopython=True, nogil=True)
 def vehicle_dynamics_st(x, uInit, p):
     """
     vehicleDynamics_st - single-track vehicle dynamics

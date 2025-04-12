@@ -13,7 +13,7 @@ Author: Nandan Tumu
 """
 
 
-@njit(cache=True)
+@njit(cache=True, nopython=True, nogil=True)
 def vehicle_dynamics_mb(x, uInit, p):
     """
     vehicleDynamics_mb - multi-body vehicle dynamics based on the DOT (department of transportation) vehicle dynamics

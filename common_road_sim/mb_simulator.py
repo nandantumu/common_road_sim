@@ -32,6 +32,8 @@ except ImportError:
     GT_STATE_PUB = False
     print("context_msgs not found, GT_STATE_PUB will not be used.")
 
+MB_VEHICLE_MODEL = False
+
 """
 This module contains the class MBVehicleSimulator, which is a simulator for a multi-body vehicle model.
 It runs on a clock at 100Hz using SciPy's odeint integration.
@@ -91,7 +93,10 @@ def integrate_model(state, control_input, parameters, dt):
     """
 
     def model_dynamics(x, t, u, p):
-        return vehicle_dynamics_st(x, u, p)
+        if MB_VEHICLE_MODEL:
+            return vehicle_dynamics_mb(x, u, p)
+        else:
+            return vehicle_dynamics_st(x, u, p)
 
     t_span = [0, dt]
     next_state = odeint(
@@ -142,9 +147,12 @@ class MBSimulator(Node):
             raise ValueError("Invalid model selected, please select 1, 2, or 3")
 
         # Initialize state vector; here we assume a 7-dimensional state.
-        initial_state = np.array([0, 0, 0, 0, 0, 0, 0])
-        # self.state = init_mb(initial_state, self.parameters)
-        self.state = initial_state  # For Single Track Model
+        # X = [x, y, delta, v, yaw, yaw_rate, beta]
+        initial_state = np.array([12, 0, 0, 0, -1.5, 0, 0])
+        if MB_VEHICLE_MODEL:
+            self.state = init_mb(initial_state, self.parameters)
+        else:
+            self.state = initial_state  # For Single Track Model
         # Initialize with a nonzero control input so the vehicle can move.
         self.control_input = np.array([0.0, 0.0])
 
@@ -221,23 +229,25 @@ class MBSimulator(Node):
         control_message.header.stamp = stamp
         combined_message.header.stamp = stamp
 
-        # MB MODEL
-        # state_message.x = self.state[0]
-        # state_message.y = self.state[1]
-        # state_message.velocity = self.state[3]
-        # state_message.yaw = transform_yaw(self.state[4])
-        # state_message.yaw_rate = self.state[5]
-        # state_message.slip_angle = np.arctan2(self.state[10], self.state[3])
-        # control_message.steering_angle = self.state[2]
-        # control_message.acceleration = control_input[1]
-
-        # SINGLE TRACK MODEL
-        state_message.x = self.state[0]
-        state_message.y = self.state[1]
-        state_message.velocity = self.state[3]
-        state_message.yaw = transform_yaw(self.state[4])
-        state_message.yaw_rate = self.state[5]
-        state_message.slip_angle = self.state[6]
+        if MB_VEHICLE_MODEL:
+            state_message.x = self.state[0]
+            state_message.y = self.state[1]
+            state_message.velocity = self.state[3]
+            state_message.yaw = transform_yaw(self.state[4])
+            state_message.yaw_rate = self.state[5]
+            state_message.slip_angle = np.arctan2(self.state[10], self.state[3])
+            control_message.steering_angle = self.state[2]
+            control_message.acceleration = control_input[1]
+        else:
+            # SINGLE TRACK MODEL
+            state_message.x = self.state[0]
+            state_message.y = self.state[1]
+            state_message.velocity = self.state[3]
+            state_message.yaw = transform_yaw(self.state[4])
+            state_message.yaw_rate = self.state[5]
+            state_message.slip_angle = self.state[6]
+            control_message.steering_angle = self.state[2]
+            control_message.acceleration = control_input[1]
 
         combined_message.state = state_message
         combined_message.control = control_message
@@ -248,22 +258,37 @@ class MBSimulator(Node):
     def steer_callback(self, msg):
         new_time = self.get_clock().now()
         dt = 1 / self.freq
-        steerv = pid_steer(
-            msg.drive.steering_angle,
-            self.state[2],
-            self.parameters["steering.v_max"],
-            dt,
-        )
-        self.speed_integral_error, accl = pid_accl(
-            msg.drive.speed,
-            self.state[3],
-            self.parameters["longitudinal.a_max"],
-            self.parameters["longitudinal.v_max"],
-            self.parameters["longitudinal.v_min"],
-            self.speed_integral_error,
-            dt,
-        )
-        self.last_control_command_time = new_time
+        # Check if we get the steering velocity or the steering angle:
+
+        if msg.drive.steering_angle == 0.0:
+            # If the steering angle is 0, we assume it's a steering velocity.
+            # Convert to steering angle.
+            steerv = msg.drive.steering_angle_velocity
+        else:
+            # If the steering angle is not 0, we assume it's a steering angle.
+            # Convert to steering velocity.
+            steerv = pid_steer(
+                msg.drive.steering_angle,
+                self.state[2],
+                self.parameters["steering.v_max"],
+                dt,
+            )
+
+        if msg.drive.speed == 0.0:
+            # If the speed is 0, we assume it's an acceleration.
+            # Convert to speed.
+            accl = msg.drive.acceleration
+        else:
+            self.speed_integral_error, accl = pid_accl(
+                msg.drive.speed,
+                self.state[3],
+                self.parameters["longitudinal.a_max"],
+                self.parameters["longitudinal.v_max"],
+                self.parameters["longitudinal.v_min"],
+                self.speed_integral_error,
+                dt,
+            )
+            self.last_control_command_time = new_time
 
         if np.isnan(steerv):
             steerv = 0.0
@@ -307,13 +332,15 @@ class MBSimulator(Node):
 
         twist_message = TwistWithCovarianceStamped()
         twist_message.header = pose_message.header
-        # slip_angle = np.arctan2(self.state[10], self.state[3])
-        slip_angle = self.state[6]
+        if MB_VEHICLE_MODEL:
+            slip_angle = np.arctan2(self.state[10], self.state[3])
+            twist_message.twist.twist.linear.z = self.state[12]
+            twist_message.twist.twist.angular.x = self.state[9]
+            twist_message.twist.twist.angular.y = self.state[7]
+        else:
+            slip_angle = self.state[6]
         twist_message.twist.twist.linear.x = self.state[3] * np.cos(slip_angle)
         twist_message.twist.twist.linear.y = self.state[3] * np.sin(slip_angle)
-        # twist_message.twist.twist.linear.z = self.state[12]
-        # twist_message.twist.twist.angular.x = self.state[9]
-        # twist_message.twist.twist.angular.y = self.state[7]
         twist_message.twist.twist.angular.z = self.state[5]
 
         odom_message = Odometry()
@@ -324,8 +351,9 @@ class MBSimulator(Node):
         imu_message = Imu()
         imu_message.header = pose_message.header
         imu_message.orientation = pose_message.pose.pose.orientation
-        # imu_message.angular_velocity.x = self.state[9]
-        # imu_message.angular_velocity.y = self.state[7]
+        if MB_VEHICLE_MODEL:
+            imu_message.angular_velocity.x = self.state[9]
+            imu_message.angular_velocity.y = self.state[7]
         imu_message.angular_velocity.z = self.state[5]
         imu_message.linear_acceleration.x = control_input[1]
 
