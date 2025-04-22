@@ -20,9 +20,10 @@ from scipy.integrate import odeint, solve_ivp
 import rclpy
 from rclpy.node import Node
 from rclpy.callback_groups import MutuallyExclusiveCallbackGroup
-from scipy.integrate import odeint
+from scipy.integrate import odeint, solve_ivp
 from scipy.spatial.transform import Rotation as R
 from threading import Lock
+from copy import copy
 
 try:
     from context_msgs.msg import STControl, STState, STCombined
@@ -32,7 +33,7 @@ except ImportError:
     GT_STATE_PUB = False
     print("context_msgs not found, GT_STATE_PUB will not be used.")
 
-MB_VEHICLE_MODEL = False
+MB_VEHICLE_MODEL = True
 
 """
 This module contains the class MBVehicleSimulator, which is a simulator for a multi-body vehicle model.
@@ -62,28 +63,33 @@ def pid_accl(speed, current_speed, max_a, max_v, min_v, integral_error, dt):
     Proportional-Integral controller for acceleration.
     dt: time step duration.
     """
+    # speed error
     vel_diff = speed - current_speed
-    FS_MOD = 3.0  # Modifier for Full Scale vehicles.
+    FS_MOD = 5.0  # Modifier for Full Scale vehicles.
 
-    if current_speed > 0.0:
-        if vel_diff > 0:
-            kp = FS_MOD * 10.0 * max_a / max_v
-            ki = 0.1 * kp  # Integral gain
-        else:
-            kp = FS_MOD * 10.0 * max_a / (-min_v)
-            ki = 0.1 * kp
+    # proportional gain based on direction of error
+    if vel_diff >= 0:
+        kp = FS_MOD * 10.0 * max_a / max_v
     else:
-        if vel_diff > 0:
-            kp = FS_MOD * 10.0 * max_a / max_v
-            ki = 0.1 * kp
-        else:
-            kp = FS_MOD * 10.0 * max_a / (-min_v)
-            ki = 0.1 * kp
+        kp = FS_MOD * 10.0 * max_a / (-min_v)
+    ki = 0.1 * kp
 
-    # Accumulate error using a static (function attribute) variable.
+    # integrate error
     integral_error += vel_diff * dt
 
+    # control signal computation
     control_signal = kp * vel_diff + ki * integral_error
+    # clamp to acceleration limits
+    if control_signal > max_a:
+        control_signal = max_a
+    elif control_signal < -max_a:
+        control_signal = -max_a
+
+    if vel_diff > 0:
+        control_signal = max_a
+    elif vel_diff < 0:
+        control_signal = -max_a
+
     return integral_error, control_signal
 
 
@@ -92,21 +98,23 @@ def integrate_model(state, control_input, parameters, dt):
     Integrate the vehicle dynamics using SciPy's odeint over the interval [0, dt].
     """
 
-    def model_dynamics(x, t, u, p):
+    def model_dynamics(t, x, u, p):
         if MB_VEHICLE_MODEL:
             return vehicle_dynamics_mb(x, u, p)
         else:
             return vehicle_dynamics_st(x, u, p)
 
     t_span = [0, dt]
-    next_state = odeint(
+    sol = solve_ivp(
         model_dynamics,
-        state,
         t_span,
-        args=(control_input, parameters),
+        state,
         rtol=1e-3,
         atol=1e-3,
-    )[-1]
+        args=(control_input, parameters),
+        method="LSODA",
+    )
+    next_state = sol.y[:, -1]
 
     return next_state
 
@@ -237,7 +245,8 @@ class MBSimulator(Node):
             state_message.yaw_rate = self.state[5]
             state_message.slip_angle = np.arctan2(self.state[10], self.state[3])
             control_message.steering_angle = self.state[2]
-            control_message.acceleration = control_input[1]
+            control_message.acceleration = self.control_input[1]
+            control_message.steering_angle_velocity = self.control_input[0]
         else:
             # SINGLE TRACK MODEL
             state_message.x = self.state[0]
@@ -247,10 +256,11 @@ class MBSimulator(Node):
             state_message.yaw_rate = self.state[5]
             state_message.slip_angle = self.state[6]
             control_message.steering_angle = self.state[2]
-            control_message.acceleration = control_input[1]
+            control_message.acceleration = self.control_input[1]
+            control_message.steering_angle_velocity = self.control_input[0]
 
-        combined_message.state = state_message
-        combined_message.control = control_message
+        combined_message.state = copy(state_message)
+        combined_message.control = copy(control_message)
         self.gt_state_pub.publish(state_message)
         self.gt_control_pub.publish(control_message)
         self.gt_combined_pub.publish(combined_message)
@@ -260,7 +270,10 @@ class MBSimulator(Node):
         dt = 1 / self.freq
         # Check if we get the steering velocity or the steering angle:
 
-        if msg.drive.steering_angle == 0.0:
+        STEER_MODE = "steering_angle_velocity"
+        LONG_MODE = "speed"
+
+        if STEER_MODE == "steering_angle_velocity":
             # If the steering angle is 0, we assume it's a steering velocity.
             # Convert to steering angle.
             steerv = msg.drive.steering_angle_velocity
@@ -274,10 +287,10 @@ class MBSimulator(Node):
                 dt,
             )
 
-        if msg.drive.speed == 0.0:
+        if LONG_MODE == "acceleration":
             # If the speed is 0, we assume it's an acceleration.
             # Convert to speed.
-            accl = msg.drive.acceleration
+            accl = msg.drive.acceleration * 2.0
         else:
             self.speed_integral_error, accl = pid_accl(
                 msg.drive.speed,
