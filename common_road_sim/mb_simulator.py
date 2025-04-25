@@ -104,6 +104,8 @@ def integrate_model(state, control_input, parameters, dt):
         else:
             return vehicle_dynamics_st(x, u, p)
 
+    control_noise = np.random.randn(len(control_input)) * 0.00001
+
     t_span = [0, dt]
     sol = solve_ivp(
         model_dynamics,
@@ -111,10 +113,22 @@ def integrate_model(state, control_input, parameters, dt):
         state,
         rtol=1e-3,
         atol=1e-3,
-        args=(control_input, parameters),
+        args=(control_input + control_noise, parameters),
         method="LSODA",
     )
     next_state = sol.y[:, -1]
+
+    # # add Gaussian noise to selected state elements
+    noise_idx = [0, 1]  # [0, 1, 2, 3, 4, 6, 8, 11, 12]
+    noise_mag = [
+        0.0001,
+        0.0001,
+    ]  # [0.01, 0.01, 0.0001, 0.001, 0.001, 0.001, 0.001, 0.001, 0.001]
+    # # # draw one standard‐normal sample per index
+    noise = np.random.randn(len(noise_idx))
+    noise = noise * noise_mag
+    # # # add noise to those state entries
+    next_state[noise_idx] += noise
 
     return next_state
 
@@ -219,17 +233,18 @@ class MBSimulator(Node):
         # self.get_logger().info(
         #     f"Friction: {self.parameters['tire.p_dy1']} | Control input: {control_input}"
         # )
+        time_now = self.get_clock().now()
         with self.parameter_lock:
             self.state = integrate_model(
                 self.state, control_input, self.parameters, 1 / self.freq
             )
-        self.publish_pose_and_covariance(control_input)
+        self.publish_pose_and_covariance(control_input, time_now)
 
         if self.ground_truth_pub:
-            self.publish_gt_state(control_input)
+            self.publish_gt_state(control_input, time_now)
 
-    def publish_gt_state(self, control_input):
-        stamp = self.get_clock().now().to_msg()
+    def publish_gt_state(self, control_input, time_now):
+        stamp = time_now.to_msg()
         state_message = STState()
         control_message = STControl()
         combined_message = STCombined()
@@ -271,7 +286,7 @@ class MBSimulator(Node):
         # Check if we get the steering velocity or the steering angle:
 
         STEER_MODE = "steering_angle_velocity"
-        LONG_MODE = "speed"
+        LONG_MODE = "acceleration"
 
         if STEER_MODE == "steering_angle_velocity":
             # If the steering angle is 0, we assume it's a steering velocity.
@@ -290,7 +305,15 @@ class MBSimulator(Node):
         if LONG_MODE == "acceleration":
             # If the speed is 0, we assume it's an acceleration.
             # Convert to speed.
-            accl = msg.drive.acceleration * 2.0
+            accl = msg.drive.acceleration * 1.0
+            # ensure acceleration within limits
+            max_a = self.parameters["longitudinal.a_max"]
+            if accl > max_a:
+                accl = max_a
+            elif accl < -max_a:
+                accl = -max_a
+
+            self.last_control_command_time = new_time
         else:
             self.speed_integral_error, accl = pid_accl(
                 msg.drive.speed,
@@ -318,11 +341,11 @@ class MBSimulator(Node):
             self.parameters["tire.p_dy1"] = msg.data
         # self.get_logger().info(f"Friction coefficient updated to {msg.data}")
 
-    def publish_pose_and_covariance(self, control_input=None):
+    def publish_pose_and_covariance(self, control_input=None, time_now=None):
         if control_input is None:
             control_input = self.control_input
         pose_message = PoseWithCovarianceStamped()
-        pose_message.header.stamp = self.get_clock().now().to_msg()
+        pose_message.header.stamp = time_now.to_msg()
         pose_message.header.frame_id = "map"
         pose_message.pose.pose.position.x = self.state[0]
         pose_message.pose.pose.position.y = self.state[1]
