@@ -477,7 +477,7 @@ def vehicle_dynamics_mb(x, uInit, p):
     )
 
     # dynamics common with single-track model
-    f = [0.0] * 29  # init 'right hand side'
+    f = []  # init 'right hand side'
     # switch to kinematic model for small velocities
     if abs(x[3]) < p["longitudinal.v_switch"]:
         # wheelbase
@@ -496,7 +496,7 @@ def vehicle_dynamics_mb(x, uInit, p):
         x_ks = [x[0], x[1], x[2], x[3], x[4]]
         # kinematic model
         f_ks = vehicle_dynamics_ks_cog(x_ks, u, p)
-        f[:5] = [f_ks[0], f_ks[1], f_ks[2], f_ks[3], f_ks[4]]
+        f = [f_ks[0], f_ks[1], f_ks[2], f_ks[3], f_ks[4]]
         # derivative of slip angle and yaw rate
         d_beta = (p["b"] * u[0]) / (
             lwb * jnp.cos(x[2]) ** 2 * (1 + (jnp.tan(x[2]) ** 2 * p["b"] / lwb) ** 2)
@@ -510,46 +510,46 @@ def vehicle_dynamics_mb(x, uInit, p):
                 + x[3] * jnp.cos(x[6]) * u[0] / jnp.cos(x[2]) ** 2
             )
         )
-        f[5] = dd_psi
+        f.append(dd_psi)
 
     else:
-        f[0] = jnp.cos(beta + x[4]) * vel
-        f[1] = jnp.sin(beta + x[4]) * vel
-        f[2] = u[0]
-        f[3] = 1 / p["m"] * sumX + x[5] * x[10]
-        f[4] = x[5]
-        f[5] = (
+        f.append(jnp.cos(beta + x[4]) * vel)
+        f.append(jnp.sin(beta + x[4]) * vel)
+        f.append(u[0])
+        f.append(1 / p["m"] * sumX + x[5] * x[10])
+        f.append(x[5])
+        f.append(
             1
             / (p["I_z"] - (p["I_xz_s"]) ** 2 / p["I_Phi_s"])
             * (sumN + p["I_xz_s"] / p["I_Phi_s"] * sumL)
         )
 
     # remaining sprung mass dynamics
-    f[6] = x[7]
-    f[7] = (
+    f.append(x[7])
+    f.append(
         1
         / (p["I_Phi_s"] - (p["I_xz_s"]) ** 2 / p["I_z"])
         * (p["I_xz_s"] / p["I_z"] * sumN + sumL)
     )
-    f[8] = x[9]
-    f[9] = 1 / p["I_y_s"] * sumM_s
-    f[10] = 1 / p["m_s"] * sumY_s - x[5] * x[3]
-    f[11] = x[12]
-    f[12] = g - 1 / p["m_s"] * sumZ_s
+    f.append(x[9])
+    f.append(1 / p["I_y_s"] * sumM_s)
+    f.append(1 / p["m_s"] * sumY_s - x[5] * x[3])
+    f.append(x[12])
+    f.append(g - 1 / p["m_s"] * sumZ_s)
 
     # unsprung mass dynamics (front)
-    f[13] = x[14]
-    f[14] = 1 / p["I_uf"] * sumL_uf
-    f[15] = 1 / p["m_uf"] * sumY_uf - x[5] * x[3]
-    f[16] = x[17]
-    f[17] = g - 1 / p["m_uf"] * sumZ_uf
+    f.append(x[14])
+    f.append(1 / p["I_uf"] * sumL_uf)
+    f.append(1 / p["m_uf"] * sumY_uf - x[5] * x[3])
+    f.append(x[17])
+    f.append(g - 1 / p["m_uf"] * sumZ_uf)
 
     # unsprung mass dynamics (rear)
-    f[18] = x[19]
-    f[19] = 1 / p["I_ur"] * sumL_ur
-    f[20] = 1 / p["m_ur"] * sumY_ur - x[5] * x[3]
-    f[21] = x[22]
-    f[22] = g - 1 / p["m_ur"] * sumZ_ur
+    f.append(x[19])
+    f.append(1 / p["I_ur"] * sumL_ur)
+    f.append(1 / p["m_ur"] * sumY_ur - x[5] * x[3])
+    f.append(x[22])
+    f.append(g - 1 / p["m_ur"] * sumZ_ur)
 
     # convert acceleration input to brake and engine torque
     if u[1] > 0:
@@ -560,17 +560,17 @@ def vehicle_dynamics_mb(x, uInit, p):
         T_E = 0.0
 
     # wheel dynamics (p.T  new parameter for torque splitting)
-    f[23] = (
+    f.append(
         1
         / p["I_y_w"]
         * (-p["R_w"] * F_x_LF + 0.5 * p["T_sb"] * T_B + 0.5 * p["T_se"] * T_E)
     )
-    f[24] = (
+    f.append(
         1
         / p["I_y_w"]
         * (-p["R_w"] * F_x_RF + 0.5 * p["T_sb"] * T_B + 0.5 * p["T_se"] * T_E)
     )
-    f[25] = (
+    f.append(
         1
         / p["I_y_w"]
         * (
@@ -579,7 +579,7 @@ def vehicle_dynamics_mb(x, uInit, p):
             + 0.5 * (1 - p["T_se"]) * T_E
         )
     )
-    f[26] = (
+    f.append(
         1
         / p["I_y_w"]
         * (
@@ -596,8 +596,8 @@ def vehicle_dynamics_mb(x, uInit, p):
             f[iState] = 0.0
 
     # compliant joint equations
-    f[27] = dot_delta_y_f
-    f[28] = dot_delta_y_r
+    f.append(dot_delta_y_f)
+    f.append(dot_delta_y_r)
 
     return f
 
