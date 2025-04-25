@@ -13,7 +13,7 @@ Author: Nandan Tumu
 """
 
 
-@njit(cache=True, nopython=True, nogil=True)
+@njit(cache=True, nopython=True, nogil=True, parallel=True, fastmath=True)
 def vehicle_dynamics_mb(x, uInit, p):
     """
     vehicleDynamics_mb - multi-body vehicle dynamics based on the DOT (department of transportation) vehicle dynamics
@@ -30,13 +30,16 @@ def vehicle_dynamics_mb(x, uInit, p):
     Outputs:
         :return f: right-hand side of differential equations
 
-    Author: Matthias Althoff
+    Author: Matthias Althoff, Nandan Tumu
     Written: 05-January-2017
-    Last update: 17-December-2017
+    Last update: 23-April-2025
     Last revision: ---
     """
 
     # ------------- BEGIN CODE --------------
+
+    # Numeric instabilty consta
+    eps = 1e-10
 
     # set gravity constant
     g = 9.81  # [m/s^2]
@@ -166,10 +169,10 @@ def vehicle_dynamics_mb(x, uInit, p):
         s_lr = 0.0
         s_rr = 0.0
     else:
-        s_lf = 1 - p["R_w"] * x[23] / u_w_lf
-        s_rf = 1 - p["R_w"] * x[24] / u_w_rf
-        s_lr = 1 - p["R_w"] * x[25] / u_w_lr
-        s_rr = 1 - p["R_w"] * x[26] / u_w_rr
+        s_lf = 1 - p["R_w"] * x[23] / (u_w_lf + eps)
+        s_rf = 1 - p["R_w"] * x[24] / (u_w_rf + eps)
+        s_lr = 1 - p["R_w"] * x[25] / (u_w_lr + eps)
+        s_rr = 1 - p["R_w"] * x[26] / (u_w_rr + eps)
 
     # lateral slip angles
     # switch to kinematic model for small velocities
@@ -204,28 +207,28 @@ def vehicle_dynamics_mb(x, uInit, p):
 
     # auxiliary suspension movement
     z_SLF = (
-        (p["h_s"] - p["R_w"] + x[16] - x[11]) / jnp.cos(x[6])
+        (p["h_s"] - p["R_w"] + x[16] - x[11]) / (jnp.cos(x[6]) + eps)
         - p["h_s"]
         + p["R_w"]
         + p["a"] * x[8]
         + 0.5 * (x[6] - x[13]) * p["T_f"]
     )
     z_SRF = (
-        (p["h_s"] - p["R_w"] + x[16] - x[11]) / jnp.cos(x[6])
+        (p["h_s"] - p["R_w"] + x[16] - x[11]) / (jnp.cos(x[6]) + eps)
         - p["h_s"]
         + p["R_w"]
         + p["a"] * x[8]
         - 0.5 * (x[6] - x[13]) * p["T_f"]
     )
     z_SLR = (
-        (p["h_s"] - p["R_w"] + x[21] - x[11]) / jnp.cos(x[6])
+        (p["h_s"] - p["R_w"] + x[21] - x[11]) / (jnp.cos(x[6]) + eps)
         - p["h_s"]
         + p["R_w"]
         - p["b"] * x[8]
         + 0.5 * (x[6] - x[18]) * p["T_r"]
     )
     z_SRR = (
-        (p["h_s"] - p["R_w"] + x[21] - x[11]) / jnp.cos(x[6])
+        (p["h_s"] - p["R_w"] + x[21] - x[11]) / (jnp.cos(x[6]) + eps)
         - p["h_s"]
         + p["R_w"]
         - p["b"] * x[8]
@@ -383,7 +386,7 @@ def vehicle_dynamics_mb(x, uInit, p):
         - 0.5 * F_SRF * p["T_f"]
         - 0.5 * F_SRR * p["T_r"]
         - F_RAF
-        / jnp.cos(x[6])
+        / (jnp.cos(x[6]) + eps)
         * (
             p["h_s"]
             - x[11]
@@ -392,7 +395,7 @@ def vehicle_dynamics_mb(x, uInit, p):
             - (p["h_raf"] - p["R_w"]) * jnp.cos(x[13])
         )
         - F_RAR
-        / jnp.cos(x[6])
+        / (jnp.cos(x[6]) + eps)
         * (
             p["h_s"]
             - x[11]
@@ -474,7 +477,7 @@ def vehicle_dynamics_mb(x, uInit, p):
     )
 
     # dynamics common with single-track model
-    f = []  # init 'right hand side'
+    f = [0.0] * 29  # init 'right hand side'
     # switch to kinematic model for small velocities
     if abs(x[3]) < p["longitudinal.v_switch"]:
         # wheelbase
@@ -493,7 +496,7 @@ def vehicle_dynamics_mb(x, uInit, p):
         x_ks = [x[0], x[1], x[2], x[3], x[4]]
         # kinematic model
         f_ks = vehicle_dynamics_ks_cog(x_ks, u, p)
-        f = [f_ks[0], f_ks[1], f_ks[2], f_ks[3], f_ks[4]]
+        f[:5] = [f_ks[0], f_ks[1], f_ks[2], f_ks[3], f_ks[4]]
         # derivative of slip angle and yaw rate
         d_beta = (p["b"] * u[0]) / (
             lwb * jnp.cos(x[2]) ** 2 * (1 + (jnp.tan(x[2]) ** 2 * p["b"] / lwb) ** 2)
@@ -507,46 +510,46 @@ def vehicle_dynamics_mb(x, uInit, p):
                 + x[3] * jnp.cos(x[6]) * u[0] / jnp.cos(x[2]) ** 2
             )
         )
-        f.append(dd_psi)
+        f[5] = dd_psi
 
     else:
-        f.append(jnp.cos(beta + x[4]) * vel)
-        f.append(jnp.sin(beta + x[4]) * vel)
-        f.append(u[0])
-        f.append(1 / p["m"] * sumX + x[5] * x[10])
-        f.append(x[5])
-        f.append(
+        f[0] = jnp.cos(beta + x[4]) * vel
+        f[1] = jnp.sin(beta + x[4]) * vel
+        f[2] = u[0]
+        f[3] = 1 / p["m"] * sumX + x[5] * x[10]
+        f[4] = x[5]
+        f[5] = (
             1
             / (p["I_z"] - (p["I_xz_s"]) ** 2 / p["I_Phi_s"])
             * (sumN + p["I_xz_s"] / p["I_Phi_s"] * sumL)
         )
 
     # remaining sprung mass dynamics
-    f.append(x[7])
-    f.append(
+    f[6] = x[7]
+    f[7] = (
         1
         / (p["I_Phi_s"] - (p["I_xz_s"]) ** 2 / p["I_z"])
         * (p["I_xz_s"] / p["I_z"] * sumN + sumL)
     )
-    f.append(x[9])
-    f.append(1 / p["I_y_s"] * sumM_s)
-    f.append(1 / p["m_s"] * sumY_s - x[5] * x[3])
-    f.append(x[12])
-    f.append(g - 1 / p["m_s"] * sumZ_s)
+    f[8] = x[9]
+    f[9] = 1 / p["I_y_s"] * sumM_s
+    f[10] = 1 / p["m_s"] * sumY_s - x[5] * x[3]
+    f[11] = x[12]
+    f[12] = g - 1 / p["m_s"] * sumZ_s
 
     # unsprung mass dynamics (front)
-    f.append(x[14])
-    f.append(1 / p["I_uf"] * sumL_uf)
-    f.append(1 / p["m_uf"] * sumY_uf - x[5] * x[3])
-    f.append(x[17])
-    f.append(g - 1 / p["m_uf"] * sumZ_uf)
+    f[13] = x[14]
+    f[14] = 1 / p["I_uf"] * sumL_uf
+    f[15] = 1 / p["m_uf"] * sumY_uf - x[5] * x[3]
+    f[16] = x[17]
+    f[17] = g - 1 / p["m_uf"] * sumZ_uf
 
     # unsprung mass dynamics (rear)
-    f.append(x[19])
-    f.append(1 / p["I_ur"] * sumL_ur)
-    f.append(1 / p["m_ur"] * sumY_ur - x[5] * x[3])
-    f.append(x[22])
-    f.append(g - 1 / p["m_ur"] * sumZ_ur)
+    f[18] = x[19]
+    f[19] = 1 / p["I_ur"] * sumL_ur
+    f[20] = 1 / p["m_ur"] * sumY_ur - x[5] * x[3]
+    f[21] = x[22]
+    f[22] = g - 1 / p["m_ur"] * sumZ_ur
 
     # convert acceleration input to brake and engine torque
     if u[1] > 0:
@@ -557,17 +560,17 @@ def vehicle_dynamics_mb(x, uInit, p):
         T_E = 0.0
 
     # wheel dynamics (p.T  new parameter for torque splitting)
-    f.append(
+    f[23] = (
         1
         / p["I_y_w"]
         * (-p["R_w"] * F_x_LF + 0.5 * p["T_sb"] * T_B + 0.5 * p["T_se"] * T_E)
     )
-    f.append(
+    f[24] = (
         1
         / p["I_y_w"]
         * (-p["R_w"] * F_x_RF + 0.5 * p["T_sb"] * T_B + 0.5 * p["T_se"] * T_E)
     )
-    f.append(
+    f[25] = (
         1
         / p["I_y_w"]
         * (
@@ -576,7 +579,7 @@ def vehicle_dynamics_mb(x, uInit, p):
             + 0.5 * (1 - p["T_se"]) * T_E
         )
     )
-    f.append(
+    f[26] = (
         1
         / p["I_y_w"]
         * (
@@ -593,8 +596,8 @@ def vehicle_dynamics_mb(x, uInit, p):
             f[iState] = 0.0
 
     # compliant joint equations
-    f.append(dot_delta_y_f)
-    f.append(dot_delta_y_r)
+    f[27] = dot_delta_y_f
+    f[28] = dot_delta_y_r
 
     return f
 
