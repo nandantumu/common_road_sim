@@ -39,7 +39,7 @@ def vehicle_dynamics_mb(x, uInit, p):
     # ------------- BEGIN CODE --------------
 
     # Numeric instabilty consta
-    eps = 1e-10
+    eps = 1e-15
 
     # set gravity constant
     g = 9.81  # [m/s^2]
